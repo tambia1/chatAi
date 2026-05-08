@@ -1,0 +1,91 @@
+{
+  "name": "elmo",
+  "displayName": "Elmo",
+  "description": "Chat with your local Gemma model from VS Code.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "elmo",
+          "title": "Elmo",
+          "icon": "media/elmo.svg"
+        }
+      ]
+    },
+    "views": {
+      "elmo": [
+        {
+          "id": "elmo.chat",
+          "name": "Chat",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "elmo.clearChat",
+        "title": "Elmo: Clear Chat",
+        "icon": "$(clear-all)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "elmo.clearChat",
+          "when": "view == elmo.chat",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Elmo",
+      "properties": {
+        "elmo.endpoint": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Base URL of the Ollama server."
+        },
+        "elmo.model": {
+          "type": "string",
+          "default": "gemma4:31b",
+          "description": "Default Ollama model selected on startup (must match a name from `ollama list`)."
+        },
+        "elmo.models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "gemma4:31b",
+            "qwen3.6:35b"
+          ],
+          "description": "List of Ollama models offered in the chat view's model picker."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js --production",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.4.0"
+  }
+}

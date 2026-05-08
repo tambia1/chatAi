@@ -1,0 +1,44 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build",
+      "type": "shell",
+      "command": "npm run build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "watch",
+      "type": "shell",
+      "command": "npm run watch",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Elmo: Package VSIX",
+      "type": "shell",
+      "command": "npx vsce package --allow-missing-repository",
+      "problemMatcher": []
+    },
+    {
+      "label": "Elmo: Install VSIX",
+      "type": "shell",
+      "command": "code --install-extension $(ls -t elmo-*.vsix | head -n 1) --force",
+      "problemMatcher": []
+    },
+    {
+      "label": "Elmo: Build + Package + Install",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "build",
+        "Elmo: Package VSIX",
+        "Elmo: Install VSIX"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/dist/**/*.js"
+      ],
+      "preLaunchTask": "${defaultBuildTask}"
+    },
+    {
+      "name": "Run gemme4:31b",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "ollama run gemma4:31b",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Run qwen3.6:35b",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "ollama run qwen3.6:35b",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Elmo: Build + Package + Install",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run build && yes | npx vsce package --allow-missing-repository && code --install-extension $(ls -t elmo-*.vsix | head -n 1) --force",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "NODE_OPTIONS": ""
+      }
+    }
+  ]
+}
