@@ -1,9 +1,10 @@
 {
   "name": "elmo",
   "displayName": "Elmo",
-  "description": "Chat with your local Gemma model from VS Code.",
+  "description": "Chat with your local AI model from VS Code.",
   "version": "0.0.1",
   "publisher": "local",
+  "icon": "media/elmo.png",
   "engines": {
     "vscode": "^1.85.0"
   },
