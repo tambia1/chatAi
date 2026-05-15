@@ -7,7 +7,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, provider, {
       webviewOptions: { retainContextWhenHidden: true },
     }),
-    vscode.commands.registerCommand('elmo.clearChat', () => provider.clearChat()),
+    vscode.commands.registerCommand('chatAi.clearChat', () => provider.clearChat()),
   );
 }
 

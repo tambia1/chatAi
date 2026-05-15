@@ -87,7 +87,7 @@ body {
   border-radius: 50%;
   background: var(--vscode-foreground);
   opacity: 0.4;
-  animation: elmo-loader 1s infinite ease-in-out;
+  animation: chatAi-loader 1s infinite ease-in-out;
 }
 
 .msg.assistant .loader span:nth-child(2) {
@@ -98,7 +98,7 @@ body {
   animation-delay: 0.3s;
 }
 
-@keyframes elmo-loader {
+@keyframes chatAi-loader {
 
   0%,
   80%,

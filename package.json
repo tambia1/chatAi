@@ -1,10 +1,10 @@
 {
-  "name": "elmo",
-  "displayName": "Elmo",
+  "name": "chatai",
+  "displayName": "chatAi",
   "description": "Chat with your local AI model from VS Code.",
   "version": "0.0.1",
   "publisher": "local",
-  "icon": "media/elmo.png",
+  "icon": "media/chatAi.png",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -17,16 +17,16 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "elmo",
-          "title": "Elmo",
-          "icon": "media/elmo.svg"
+          "id": "chatAi",
+          "title": "chatAi",
+          "icon": "media/chatAi.svg"
         }
       ]
     },
     "views": {
-      "elmo": [
+      "chatAi": [
         {
-          "id": "elmo.chat",
+          "id": "chatAi.chat",
           "name": "Chat",
           "type": "webview"
         }
@@ -34,34 +34,34 @@
     },
     "commands": [
       {
-        "command": "elmo.clearChat",
-        "title": "Elmo: Clear Chat",
+        "command": "chatAi.clearChat",
+        "title": "chatAi: Clear Chat",
         "icon": "$(clear-all)"
       }
     ],
     "menus": {
       "view/title": [
         {
-          "command": "elmo.clearChat",
-          "when": "view == elmo.chat",
+          "command": "chatAi.clearChat",
+          "when": "view == chatAi.chat",
           "group": "navigation"
         }
       ]
     },
     "configuration": {
-      "title": "Elmo",
+      "title": "chatAi",
       "properties": {
-        "elmo.endpoint": {
+        "chatAi.endpoint": {
           "type": "string",
           "default": "http://localhost:11434",
           "description": "Base URL of the Ollama server."
         },
-        "elmo.model": {
+        "chatAi.model": {
           "type": "string",
           "default": "gemma4:31b",
           "description": "Default Ollama model selected on startup (must match a name from `ollama list`)."
         },
-        "elmo.models": {
+        "chatAi.models": {
           "type": "array",
           "items": {
             "type": "string"

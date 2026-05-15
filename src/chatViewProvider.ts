@@ -6,7 +6,7 @@ interface ChatTurn {
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = 'elmo.chat';
+  public static readonly viewType = 'chatAi.chat';
 
   private view?: vscode.WebviewView;
   private history: ChatTurn[] = [];
@@ -51,7 +51,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private postInit(): void {
     if (!this.view) return;
-    const cfg = vscode.workspace.getConfiguration('elmo');
+    const cfg = vscode.workspace.getConfiguration('chatAi');
     const models = cfg.get<string[]>('models', ['gemma4:31b', 'qwen3.6:35b']);
     const selected = cfg.get<string>('model', models[0] ?? 'gemma4:31b');
     this.view.webview.postMessage({ type: 'init', models, selected });
@@ -92,7 +92,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.view.webview.postMessage({ type: 'user', text });
     this.view.webview.postMessage({ type: 'assistantStart' });
 
-    const cfg = vscode.workspace.getConfiguration('elmo');
+    const cfg = vscode.workspace.getConfiguration('chatAi');
     const endpoint = cfg.get<string>('endpoint', 'http://localhost:11434');
     const model = requestedModel?.trim() || cfg.get<string>('model', 'gemma4:31b');
     const prompt = this.buildPrompt(this.getEditorContext());
@@ -213,7 +213,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 <div id="messages"></div>
 <form id="composer">
   <div id="context" class="context" hidden></div>
-  <textarea id="input" rows="2" placeholder="Ask Elmo..." autofocus></textarea>
+  <textarea id="input" rows="2" placeholder="Ask chatAi..." autofocus></textarea>
   <div class="row">
     <label for="model" id="modelLabel">Model</label>
     <select id="model" aria-label="Model"></select>
