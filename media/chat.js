@@ -1,12 +1,13 @@
 (function () {
   const vscode = acquireVsCodeApi();
-  const messagesEl = document.getElementById('messages');
+  const messagesElement = document.getElementById('messages');
   const form = document.getElementById('composer');
   const input = document.getElementById('input');
-  const sendBtn = document.getElementById('send');
-  const cancelBtn = document.getElementById('cancel');
-  const modelSelect = document.getElementById('model');
-  const contextEl = document.getElementById('context');
+  const sendButton = document.getElementById('send');
+  const cancelButton = document.getElementById('cancel');
+  const modelSelectElement = document.getElementById('model');
+  const contextElement = document.getElementById('context');
+  const contextSizeElement = document.getElementById('contextSize');
 
   let currentAssistant = null;
 
@@ -37,128 +38,149 @@
   }
 
   function renderContext(file, selection) {
-    contextEl.innerHTML = '';
+    contextElement.innerHTML = '';
     if (!file) {
-      contextEl.hidden = true;
+      contextElement.hidden = true;
       return;
     }
-    contextEl.hidden = false;
-    contextEl.appendChild(makeChip(FILE_ICON_SVG, file.name, file.path));
+    contextElement.hidden = false;
+    contextElement.appendChild(makeChip(FILE_ICON_SVG, file.name, file.path));
     if (selection) {
       const range =
         selection.startLine === selection.endLine
           ? 'line ' + selection.startLine
           : 'lines ' + selection.startLine + '\u2013' + selection.endLine;
-      contextEl.appendChild(makeChip(SEL_ICON_SVG, range, 'Selection in ' + file.path));
+      contextElement.appendChild(makeChip(SEL_ICON_SVG, range, 'Selection in ' + file.path));
     }
+  }
+
+  function formatKB(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    return (bytes / 1024).toFixed(bytes < 10240 ? 1 : 0) + ' KB';
+  }
+
+  function formatTokens(tokens) {
+    if (tokens < 1000) return tokens + ' tok';
+    return (tokens / 1000).toFixed(tokens < 10000 ? 1 : 0) + 'k tok';
+  }
+
+  function renderContextSize(bytes, tokens, numCtx, severity) {
+    contextSizeElement.hidden = false;
+    contextSizeElement.className = 'context-size ' + (severity || 'ok');
+    contextSizeElement.textContent =
+      'sent: ' + formatKB(bytes) + ' \u00b7 ~' + formatTokens(tokens) +
+      ' / ' + formatTokens(numCtx);
   }
 
   function populateModels(models, selected) {
-    modelSelect.innerHTML = '';
+    modelSelectElement.innerHTML = '';
     const saved = (vscode.getState() || {}).model;
     const preferred = (saved && models.includes(saved)) ? saved : selected;
-    for (const m of models) {
-      const opt = document.createElement('option');
-      opt.value = m;
-      opt.textContent = m;
-      if (m === preferred) opt.selected = true;
-      modelSelect.appendChild(opt);
+    for (const modelName of models) {
+      const option = document.createElement('option');
+      option.value = modelName;
+      option.textContent = modelName;
+      if (modelName === preferred) option.selected = true;
+      modelSelectElement.appendChild(option);
     }
   }
 
-  modelSelect.addEventListener('change', () => {
+  modelSelectElement.addEventListener('change', () => {
     const state = vscode.getState() || {};
-    state.model = modelSelect.value;
+    state.model = modelSelectElement.value;
     vscode.setState(state);
   });
 
   function addMessage(role, text) {
-    const el = document.createElement('div');
-    el.className = 'msg ' + role;
-    el.textContent = text;
-    messagesEl.appendChild(el);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    return el;
+    const element = document.createElement('div');
+    element.className = 'message ' + role;
+    element.textContent = text;
+    messagesElement.appendChild(element);
+    messagesElement.scrollTop = messagesElement.scrollHeight;
+    return element;
   }
 
   function addAssistantMessage() {
-    const wrap = document.createElement('div');
-    wrap.className = 'msg assistant';
+    const wrapper = document.createElement('div');
+    wrapper.className = 'message assistant';
 
     const loader = document.createElement('div');
     loader.className = 'loader';
     loader.innerHTML = '<span></span><span></span><span></span>';
-    wrap.appendChild(loader);
+    wrapper.appendChild(loader);
 
     const thinking = document.createElement('div');
     thinking.className = 'thinking';
     thinking.hidden = true;
-    const tHeader = document.createElement('div');
-    tHeader.className = 'thinking-header';
-    tHeader.textContent = 'Thinking...';
-    const tContent = document.createElement('div');
-    tContent.className = 'thinking-content';
-    const tFooter = document.createElement('div');
-    tFooter.className = 'thinking-footer';
-    tFooter.textContent = '...done thinking.';
-    tFooter.hidden = true;
-    thinking.appendChild(tHeader);
-    thinking.appendChild(tContent);
-    thinking.appendChild(tFooter);
+    const thinkingHeader = document.createElement('div');
+    thinkingHeader.className = 'thinking-header';
+    thinkingHeader.textContent = 'Thinking...';
+    const thinkingContent = document.createElement('div');
+    thinkingContent.className = 'thinking-content';
+    const thinkingFooter = document.createElement('div');
+    thinkingFooter.className = 'thinking-footer';
+    thinkingFooter.textContent = '...done thinking.';
+    thinkingFooter.hidden = true;
+    thinking.appendChild(thinkingHeader);
+    thinking.appendChild(thinkingContent);
+    thinking.appendChild(thinkingFooter);
 
     const response = document.createElement('div');
     response.className = 'response';
 
-    wrap.appendChild(thinking);
-    wrap.appendChild(response);
-    messagesEl.appendChild(wrap);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    return { loader, thinking, tContent, tFooter, response };
+    wrapper.appendChild(thinking);
+    wrapper.appendChild(response);
+    messagesElement.appendChild(wrapper);
+    messagesElement.scrollTop = messagesElement.scrollHeight;
+    return { loader, thinking, thinkingContent, thinkingFooter, response };
   }
 
-  function hideLoader(a) {
-    if (a && a.loader) {
-      a.loader.remove();
-      a.loader = null;
+  function hideLoader(assistant) {
+    if (assistant && assistant.loader) {
+      assistant.loader.remove();
+      assistant.loader = null;
     }
   }
 
   function setStreaming(streaming) {
-    sendBtn.hidden = streaming;
-    cancelBtn.hidden = !streaming;
+    sendButton.hidden = streaming;
+    cancelButton.hidden = !streaming;
     input.disabled = streaming;
   }
 
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
     const text = input.value.trim();
     if (!text) return;
     input.value = '';
-    vscode.postMessage({ type: 'send', text, model: modelSelect.value });
+    vscode.postMessage({ type: 'send', text, model: modelSelectElement.value });
   });
 
-  cancelBtn.addEventListener('click', () => {
+  cancelButton.addEventListener('click', () => {
     vscode.postMessage({ type: 'cancel' });
   });
 
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
       form.requestSubmit();
     }
   });
 
   window.addEventListener('message', (event) => {
-    const msg = event.data;
-    switch (msg.type) {
+    const message = event.data;
+    switch (message.type) {
       case 'init':
-        populateModels(msg.models || [], msg.selected);
+        populateModels(message.models || [], message.selected);
         break;
       case 'context':
-        renderContext(msg.file, msg.selection);
+        renderContext(message.file, message.selection);
+        break;
+      case 'contextSize':
+        renderContextSize(message.bytes, message.tokens, message.numCtx, message.severity);
         break;
       case 'user':
-        addMessage('user', msg.text);
+        addMessage('user', message.text);
         break;
       case 'assistantStart':
         currentAssistant = addAssistantMessage();
@@ -168,18 +190,18 @@
         if (currentAssistant) {
           hideLoader(currentAssistant);
           currentAssistant.thinking.hidden = false;
-          currentAssistant.tContent.textContent += msg.text;
-          messagesEl.scrollTop = messagesEl.scrollHeight;
+          currentAssistant.thinkingContent.textContent += message.text;
+          messagesElement.scrollTop = messagesElement.scrollHeight;
         }
         break;
       case 'assistantChunk':
         if (currentAssistant) {
           hideLoader(currentAssistant);
           if (!currentAssistant.thinking.hidden) {
-            currentAssistant.tFooter.hidden = false;
+            currentAssistant.thinkingFooter.hidden = false;
           }
-          currentAssistant.response.textContent += msg.text;
-          messagesEl.scrollTop = messagesEl.scrollHeight;
+          currentAssistant.response.textContent += message.text;
+          messagesElement.scrollTop = messagesElement.scrollHeight;
         }
         break;
       case 'assistantEnd':
@@ -190,12 +212,12 @@
         break;
       case 'error':
         hideLoader(currentAssistant);
-        addMessage('error', msg.text);
+        addMessage('error', message.text);
         currentAssistant = null;
         setStreaming(false);
         break;
       case 'clear':
-        messagesEl.innerHTML = '';
+        messagesElement.innerHTML = '';
         currentAssistant = null;
         setStreaming(false);
         break;

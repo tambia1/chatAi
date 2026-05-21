@@ -15,12 +15,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   constructor(private readonly extensionUri: vscode.Uri) {
     this.lastEditor = vscode.window.activeTextEditor;
-    vscode.window.onDidChangeActiveTextEditor((e) => {
-      if (e) this.lastEditor = e;
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      if (editor) this.lastEditor = editor;
       this.postContext();
     });
-    vscode.window.onDidChangeTextEditorSelection((e) => {
-      if (e.textEditor === this.lastEditor || e.textEditor === vscode.window.activeTextEditor) {
+    vscode.window.onDidChangeTextEditorSelection((event) => {
+      if (event.textEditor === this.lastEditor || event.textEditor === vscode.window.activeTextEditor) {
         this.postContext();
       }
     });
@@ -34,13 +34,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
     webviewView.webview.html = this.getHtml(webviewView.webview);
 
-    webviewView.webview.onDidReceiveMessage(async (msg) => {
-      switch (msg?.type) {
+    webviewView.webview.onDidReceiveMessage(async (message) => {
+      switch (message?.type) {
         case 'ready':
           this.postInit();
           break;
         case 'send':
-          await this.handleSend(String(msg.text ?? ''), msg.model ? String(msg.model) : undefined);
+          await this.handleSend(String(message.text ?? ''), message.model ? String(message.model) : undefined);
           break;
         case 'cancel':
           this.currentAbort?.abort();
@@ -51,32 +51,45 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private postInit(): void {
     if (!this.view) return;
-    const cfg = vscode.workspace.getConfiguration('chatAi');
-    const models = cfg.get<string[]>('models', ['gemma4:31b', 'qwen3.6:35b']);
-    const selected = cfg.get<string>('model', models[0] ?? 'gemma4:31b');
+    const config = vscode.workspace.getConfiguration('chatAi');
+    const models = config.get<string[]>('models', ['gemma4:31b', 'qwen3.6:35b']);
+    const selected = config.get<string>('model', models[0] ?? 'gemma4:31b');
     this.view.webview.postMessage({ type: 'init', models, selected });
     this.postContext();
   }
 
   private postContext(): void {
     if (!this.view) return;
-    const ed = vscode.window.activeTextEditor ?? this.lastEditor;
-    if (!ed) {
+    const editor = vscode.window.activeTextEditor ?? this.lastEditor;
+    if (!editor) {
       this.view.webview.postMessage({ type: 'context', file: null, selection: null });
       return;
     }
-    const doc = ed.document;
-    if (doc.uri.scheme !== 'file' && doc.uri.scheme !== 'untitled') {
+    const document = editor.document;
+    if (document.uri.scheme !== 'file' && document.uri.scheme !== 'untitled') {
       this.view.webview.postMessage({ type: 'context', file: null, selection: null });
       return;
     }
-    const path = vscode.workspace.asRelativePath(doc.uri);
+    const path = vscode.workspace.asRelativePath(document.uri);
     const name = path.split(/[\\/]/).pop() || path;
-    const sel = ed.selection;
-    const selection = sel.isEmpty
+    const selection = editor.selection;
+    const selectionInfo = selection.isEmpty
       ? null
-      : { startLine: sel.start.line + 1, endLine: sel.end.line + 1 };
-    this.view.webview.postMessage({ type: 'context', file: { name, path }, selection });
+      : { startLine: selection.start.line + 1, endLine: selection.end.line + 1 };
+    this.view.webview.postMessage({ type: 'context', file: { name, path }, selection: selectionInfo });
+  }
+
+  private postContextSize(
+    messages: Array<{ role: string; content: string }>,
+    numCtx: number,
+  ): void {
+    if (!this.view) return;
+    const bytes = messages.reduce((sum, message) => sum + message.content.length, 0);
+    const tokens = Math.ceil(bytes / 4);
+    let severity: 'ok' | 'warn' | 'over' = 'ok';
+    if (tokens > numCtx) severity = 'over';
+    else if (tokens > numCtx * 0.8) severity = 'warn';
+    this.view.webview.postMessage({ type: 'contextSize', bytes, tokens, numCtx, severity });
   }
 
   clearChat(): void {
@@ -92,32 +105,40 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.view.webview.postMessage({ type: 'user', text });
     this.view.webview.postMessage({ type: 'assistantStart' });
 
-    const cfg = vscode.workspace.getConfiguration('chatAi');
-    const endpoint = cfg.get<string>('endpoint', 'http://localhost:11434');
-    const model = requestedModel?.trim() || cfg.get<string>('model', 'gemma4:31b');
-    const messages = this.buildMessages(this.getEditorContext());
+    const config = vscode.workspace.getConfiguration('chatAi');
+    const endpoint = config.get<string>('endpoint', 'http://localhost:11434');
+    const model = requestedModel?.trim() || config.get<string>('model', 'gemma4:31b');
+    const numCtx = config.get<number>('numCtx', 32768);
+    const messages = this.buildMessages(await this.getEditorContext());
+    this.postContextSize(messages, numCtx);
 
     let assistantText = '';
     const controller = new AbortController();
     this.currentAbort = controller;
 
     try {
-      const res = await fetch(`${endpoint.replace(/\/$/, '')}/api/chat`, {
+      const response = await fetch(`${endpoint.replace(/\/$/, '')}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages, stream: true, think: true }),
+        body: JSON.stringify({
+          model,
+          messages,
+          stream: true,
+          think: true,
+          options: { num_ctx: numCtx },
+        }),
         signal: controller.signal,
       });
 
-      if (!res.ok || !res.body) {
+      if (!response.ok || !response.body) {
         this.view.webview.postMessage({
           type: 'error',
-          text: `HTTP ${res.status} ${res.statusText}`,
+          text: `HTTP ${response.status} ${response.statusText}`,
         });
         return;
       }
 
-      const reader = res.body.getReader();
+      const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
 
@@ -125,22 +146,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buffer.indexOf('\n')) !== -1) {
-          const line = buffer.slice(0, nl).trim();
-          buffer = buffer.slice(nl + 1);
+        let newlineIndex: number;
+        while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, newlineIndex).trim();
+          buffer = buffer.slice(newlineIndex + 1);
           if (!line) continue;
           try {
-            const obj = JSON.parse(line);
-            const msg = obj.message ?? {};
-            if (typeof msg.thinking === 'string' && msg.thinking.length > 0) {
-              this.view.webview.postMessage({ type: 'thinkingChunk', text: msg.thinking });
+            const chunk = JSON.parse(line);
+            const message = chunk.message ?? {};
+            if (typeof message.thinking === 'string' && message.thinking.length > 0) {
+              this.view.webview.postMessage({ type: 'thinkingChunk', text: message.thinking });
             }
-            if (typeof msg.content === 'string' && msg.content.length > 0) {
-              assistantText += msg.content;
-              this.view.webview.postMessage({ type: 'assistantChunk', text: msg.content });
+            if (typeof message.content === 'string' && message.content.length > 0) {
+              assistantText += message.content;
+              this.view.webview.postMessage({ type: 'assistantChunk', text: message.content });
             }
-            if (obj.done) {
+            if (chunk.done) {
               this.view.webview.postMessage({ type: 'assistantEnd' });
             }
           } catch {
@@ -148,12 +169,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
         }
       }
-    } catch (err: unknown) {
-      const e = err as { name?: string; message?: string };
-      if (e?.name === 'AbortError') {
+    } catch (caughtError: unknown) {
+      const error = caughtError as { name?: string; message?: string };
+      if (error?.name === 'AbortError') {
         this.view.webview.postMessage({ type: 'assistantEnd' });
       } else {
-        this.view.webview.postMessage({ type: 'error', text: e?.message ?? String(err) });
+        this.view.webview.postMessage({ type: 'error', text: error?.message ?? String(caughtError) });
       }
     } finally {
       this.currentAbort = undefined;
@@ -168,27 +189,95 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (liveContext) {
       messages.push({ role: 'system', content: liveContext });
     }
-    for (const t of this.history) {
-      messages.push({ role: t.role, content: t.content });
+    for (const turn of this.history) {
+      messages.push({ role: turn.role, content: turn.content });
     }
     return messages;
   }
 
-  private getEditorContext(): string {
-    const ed = vscode.window.activeTextEditor ?? this.lastEditor;
-    if (!ed) return '';
-    const doc = ed.document;
-    if (doc.uri.scheme !== 'file' && doc.uri.scheme !== 'untitled') return '';
-    const lang = doc.languageId;
-    const path = vscode.workspace.asRelativePath(doc.uri);
-    const fullText = doc.getText();
-    let out = `[Open file: ${path}]\n\`\`\`${lang}\n${fullText}\n\`\`\``;
-    const sel = ed.selection;
-    if (!sel.isEmpty) {
-      const selected = doc.getText(sel);
-      out += `\n\n[Selection from ${path} (lines ${sel.start.line + 1}-${sel.end.line + 1})]\n\`\`\`${lang}\n${selected}\n\`\`\``;
+  private async getEditorContext(): Promise<string> {
+    const parts: string[] = [];
+    const active = this.getActiveFileContext();
+    if (active) parts.push(active);
+
+    const config = vscode.workspace.getConfiguration('chatAi');
+    const includeTree = config.get<boolean>('context.includeTree', true);
+    const includeOpenTabs = config.get<boolean>('context.includeOpenTabs', true);
+
+    if (includeTree) {
+      const tree = await this.getWorkspaceTree();
+      if (tree) parts.push(tree);
     }
-    return out;
+    if (includeOpenTabs) {
+      const tabs = await this.getOpenTabsContents();
+      if (tabs) parts.push(tabs);
+    }
+    return parts.join('\n\n');
+  }
+
+  private getActiveFileContext(): string {
+    const editor = vscode.window.activeTextEditor ?? this.lastEditor;
+    if (!editor) return '';
+    const document = editor.document;
+    if (document.uri.scheme !== 'file' && document.uri.scheme !== 'untitled') return '';
+    const language = document.languageId;
+    const path = vscode.workspace.asRelativePath(document.uri);
+    const fullText = document.getText();
+    let output = `[Open file: ${path}]\n\`\`\`${language}\n${fullText}\n\`\`\``;
+    const selection = editor.selection;
+    if (!selection.isEmpty) {
+      const selectedText = document.getText(selection);
+      output += `\n\n[Selection from ${path} (lines ${selection.start.line + 1}-${selection.end.line + 1})]\n\`\`\`${language}\n${selectedText}\n\`\`\``;
+    }
+    return output;
+  }
+
+  private async getWorkspaceTree(): Promise<string> {
+    if (!vscode.workspace.workspaceFolders?.length) return '';
+    const config = vscode.workspace.getConfiguration('chatAi');
+    const exclude = config.get<string[]>('context.exclude', []);
+    const excludeGlob = exclude.length ? `{${exclude.join(',')}}` : null;
+    const uris = await vscode.workspace.findFiles('**/*', excludeGlob);
+    if (!uris.length) return '';
+    const paths = uris.map((uri) => vscode.workspace.asRelativePath(uri)).sort();
+    return `[Workspace files]\n${paths.join('\n')}`;
+  }
+
+  private async getOpenTabsContents(): Promise<string> {
+    const config = vscode.workspace.getConfiguration('chatAi');
+    const maxBytes = config.get<number>('context.maxBytes', 100000);
+    const activeEditor = vscode.window.activeTextEditor ?? this.lastEditor;
+    const seenUris = new Set<string>();
+    if (activeEditor) seenUris.add(activeEditor.document.uri.toString());
+
+    const output: string[] = [];
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        const input = tab.input;
+        if (!(input instanceof vscode.TabInputText)) continue;
+        const uri = input.uri;
+        const key = uri.toString();
+        if (seenUris.has(key)) continue;
+        seenUris.add(key);
+        if (uri.scheme !== 'file' && uri.scheme !== 'untitled') continue;
+        try {
+          const data = await vscode.workspace.fs.readFile(uri);
+          let text = new TextDecoder().decode(data);
+          let truncated = false;
+          if (text.length > maxBytes) {
+            text = text.slice(0, maxBytes);
+            truncated = true;
+          }
+          const path = vscode.workspace.asRelativePath(uri);
+          const language = path.split('.').pop() ?? '';
+          output.push(`[Open file: ${path}${truncated ? ' (truncated)' : ''}]\n\`\`\`${language}\n${text}\n\`\`\``);
+        } catch {
+          // ignore unreadable files
+        }
+      }
+    }
+    if (!output.length) return '';
+    return output.join('\n\n');
   }
 
   private getHtml(webview: vscode.Webview): string {
@@ -211,6 +300,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 <div id="messages"></div>
 <form id="composer">
   <div id="context" class="context" hidden></div>
+  <div id="contextSize" class="context-size" hidden></div>
   <textarea id="input" rows="2" placeholder="Ask chatAi..." autofocus></textarea>
   <div class="row">
     <label for="model" id="modelLabel">Model</label>

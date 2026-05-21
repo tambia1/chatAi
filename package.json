@@ -71,6 +71,47 @@
             "qwen3.6:35b"
           ],
           "description": "List of Ollama models offered in the chat view's model picker."
+        },
+        "chatAi.context.includeTree": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include the workspace file tree (paths only, no contents) in the system message."
+        },
+        "chatAi.context.includeOpenTabs": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include the full contents of every open tab in the system message."
+        },
+        "chatAi.numCtx": {
+          "type": "number",
+          "default": 32768,
+          "description": "Ollama context window in tokens (num_ctx). Ollama's default is only 2048, which silently truncates project context."
+        },
+        "chatAi.context.maxBytes": {
+          "type": "number",
+          "default": 100000,
+          "description": "Maximum bytes read per open-tab file. Files larger than this are truncated."
+        },
+        "chatAi.context.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/node_modules/**",
+            "**/.git/**",
+            "**/dist/**",
+            "**/out/**",
+            "**/build/**",
+            "**/.next/**",
+            "**/coverage/**",
+            "**/*.min.js",
+            "**/*.min.css",
+            "**/package-lock.json",
+            "**/yarn.lock",
+            "**/pnpm-lock.yaml"
+          ],
+          "description": "Glob patterns excluded from the workspace file tree (in addition to VS Code's files.exclude)."
         }
       }
     }
