@@ -82,6 +82,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private postContextSize(
     messages: Array<{ role: string; content: string }>,
     numCtx: number,
+    parts: { activeFile: number; tree: number; openTabs: number; conversation: number },
   ): void {
     if (!this.view) return;
     const bytes = messages.reduce((sum, message) => sum + message.content.length, 0);
@@ -89,7 +90,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     let severity: 'ok' | 'warn' | 'over' = 'ok';
     if (tokens > numCtx) severity = 'over';
     else if (tokens > numCtx * 0.8) severity = 'warn';
-    this.view.webview.postMessage({ type: 'contextSize', bytes, tokens, numCtx, severity });
+    this.view.webview.postMessage({ type: 'contextSize', bytes, tokens, numCtx, severity, parts });
   }
 
   clearChat(): void {
@@ -109,8 +110,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const endpoint = config.get<string>('endpoint', 'http://localhost:11434');
     const model = requestedModel?.trim() || config.get<string>('model', 'gemma4:31b');
     const numCtx = config.get<number>('numCtx', 32768);
-    const messages = this.buildMessages(await this.getEditorContext());
-    this.postContextSize(messages, numCtx);
+    const editorContext = await this.getEditorContext();
+    const messages = this.buildMessages(editorContext.text);
+    const conversation = this.history.reduce((sum, turn) => sum + turn.content.length, 0);
+    this.postContextSize(messages, numCtx, { ...editorContext.parts, conversation });
 
     let assistantText = '';
     const controller = new AbortController();
@@ -195,10 +198,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return messages;
   }
 
-  private async getEditorContext(): Promise<string> {
-    const parts: string[] = [];
+  private async getEditorContext(): Promise<{
+    text: string;
+    parts: { activeFile: number; tree: number; openTabs: number };
+  }> {
+    const sections: string[] = [];
+    const parts = { activeFile: 0, tree: 0, openTabs: 0 };
+
     const active = this.getActiveFileContext();
-    if (active) parts.push(active);
+    if (active) {
+      parts.activeFile = active.length;
+      sections.push(active);
+    }
 
     const config = vscode.workspace.getConfiguration('chatAi');
     const includeTree = config.get<boolean>('context.includeTree', true);
@@ -206,13 +217,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     if (includeTree) {
       const tree = await this.getWorkspaceTree();
-      if (tree) parts.push(tree);
+      if (tree) {
+        parts.tree = tree.length;
+        sections.push(tree);
+      }
     }
     if (includeOpenTabs) {
       const tabs = await this.getOpenTabsContents();
-      if (tabs) parts.push(tabs);
+      if (tabs) {
+        parts.openTabs = tabs.length;
+        sections.push(tabs);
+      }
     }
-    return parts.join('\n\n');
+    return { text: sections.join('\n\n'), parts };
   }
 
   private getActiveFileContext(): string {

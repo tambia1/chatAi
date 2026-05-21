@@ -60,16 +60,33 @@
   }
 
   function formatTokens(tokens) {
-    if (tokens < 1000) return tokens + ' tok';
-    return (tokens / 1000).toFixed(tokens < 10000 ? 1 : 0) + 'k tok';
+    if (tokens < 1000) return String(tokens);
+    if (tokens < 10000) return (Math.floor(tokens / 100) / 10).toFixed(1) + 'k';
+    return Math.floor(tokens / 1000) + 'k';
   }
 
-  function renderContextSize(bytes, tokens, numCtx, severity) {
+  function renderContextSize(bytes, tokens, numCtx, severity, parts) {
     contextSizeElement.hidden = false;
     contextSizeElement.className = 'context-size ' + (severity || 'ok');
     contextSizeElement.textContent =
-      'sent: ' + formatKB(bytes) + ' \u00b7 ~' + formatTokens(tokens) +
-      ' / ' + formatTokens(numCtx);
+      'context: ' + formatTokens(tokens) + ' / ' + formatTokens(numCtx) +
+      ' tokens (' + formatKB(bytes) + ')';
+
+    const lines = [];
+    if (parts) {
+      const row = (label, byteCount) => {
+        if (!byteCount) return;
+        lines.push(label + ': ~' + formatTokens(Math.ceil(byteCount / 4)) + ' tokens (' + formatKB(byteCount) + ')');
+      };
+      row('Active file', parts.activeFile);
+      row('Workspace tree', parts.tree);
+      row('Open tabs', parts.openTabs);
+      row('Conversation', parts.conversation);
+      if (lines.length) lines.push('');
+    }
+    lines.push('Total: ~' + formatTokens(tokens) + ' tokens (' + formatKB(bytes) + ')');
+    lines.push('Limit: ' + formatTokens(numCtx) + ' tokens (chatAi.numCtx)');
+    contextSizeElement.title = lines.join('\n');
   }
 
   function populateModels(models, selected) {
@@ -177,7 +194,7 @@
         renderContext(message.file, message.selection);
         break;
       case 'contextSize':
-        renderContextSize(message.bytes, message.tokens, message.numCtx, message.severity);
+        renderContextSize(message.bytes, message.tokens, message.numCtx, message.severity, message.parts);
         break;
       case 'user':
         addMessage('user', message.text);
