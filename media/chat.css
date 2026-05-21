@@ -34,9 +34,9 @@ body {
 
 .message.user {
   align-self: flex-end;
-  background: #0a2540;
-  color: #9ecbff;
-  border: 1px solid #1d3a5f;
+  background: #17181F;
+  color: #9873EB;
+  border: 1px solid #3C3755;
 }
 
 .message.assistant {
@@ -50,24 +50,16 @@ body {
   margin-bottom: 8px;
   padding: 6px 10px;
   white-space: pre-wrap;
-}
-
-.message.assistant .thinking-header,
-.message.assistant .thinking-footer {
-  opacity: 0.6;
-}
-
-.message.assistant .thinking-content {
-  opacity: 0.75;
+  color: #586476;
 }
 
 .message.assistant .response {
   white-space: pre-wrap;
   padding: 8px 12px;
-  background: var(--vscode-editor-background);
-  border: 1px solid var(--vscode-panel-border, transparent);
+  background: #11131C;
+  border: 1px solid #3C3755;
   border-radius: 6px;
-  color: #ffffff;
+  color: #DEE4ED;
 }
 
 .message.assistant .response:empty {
