@@ -95,17 +95,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const cfg = vscode.workspace.getConfiguration('chatAi');
     const endpoint = cfg.get<string>('endpoint', 'http://localhost:11434');
     const model = requestedModel?.trim() || cfg.get<string>('model', 'gemma4:31b');
-    const prompt = this.buildPrompt(this.getEditorContext());
+    const messages = this.buildMessages(this.getEditorContext());
 
     let assistantText = '';
     const controller = new AbortController();
     this.currentAbort = controller;
 
     try {
-      const res = await fetch(`${endpoint.replace(/\/$/, '')}/api/generate`, {
+      const res = await fetch(`${endpoint.replace(/\/$/, '')}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, prompt, stream: true, think: true }),
+        body: JSON.stringify({ model, messages, stream: true, think: true }),
         signal: controller.signal,
       });
 
@@ -132,12 +132,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (!line) continue;
           try {
             const obj = JSON.parse(line);
-            if (typeof obj.thinking === 'string' && obj.thinking.length > 0) {
-              this.view.webview.postMessage({ type: 'thinkingChunk', text: obj.thinking });
+            const msg = obj.message ?? {};
+            if (typeof msg.thinking === 'string' && msg.thinking.length > 0) {
+              this.view.webview.postMessage({ type: 'thinkingChunk', text: msg.thinking });
             }
-            if (typeof obj.response === 'string' && obj.response.length > 0) {
-              assistantText += obj.response;
-              this.view.webview.postMessage({ type: 'assistantChunk', text: obj.response });
+            if (typeof msg.content === 'string' && msg.content.length > 0) {
+              assistantText += msg.content;
+              this.view.webview.postMessage({ type: 'assistantChunk', text: msg.content });
             }
             if (obj.done) {
               this.view.webview.postMessage({ type: 'assistantEnd' });
@@ -162,18 +163,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private buildPrompt(liveContext: string): string {
-    const lastIdx = this.history.length - 1;
-    const turns = this.history
-      .map((t, i) => {
-        if (t.role === 'user') {
-          const extra = i === lastIdx && liveContext ? `\n\n${liveContext}` : '';
-          return `User: ${t.content}${extra}`;
-        }
-        return `Assistant: ${t.content}`;
-      })
-      .join('\n\n');
-    return `${turns}\n\nAssistant:`;
+  private buildMessages(liveContext: string): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
+    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
+    if (liveContext) {
+      messages.push({ role: 'system', content: liveContext });
+    }
+    for (const t of this.history) {
+      messages.push({ role: t.role, content: t.content });
+    }
+    return messages;
   }
 
   private getEditorContext(): string {
