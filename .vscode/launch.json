@@ -2,6 +2,16 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Build + Package + Install",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run build && yes | npx vsce package --allow-missing-repository && code --install-extension $(ls -t chatai-*.vsix | head -n 1) --force",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "NODE_OPTIONS": ""
+      }
+    },
+    {
       "name": "Run Extension",
       "type": "extensionHost",
       "request": "launch",
@@ -26,16 +36,6 @@
       "request": "launch",
       "command": "ollama run qwen3.6:35b",
       "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "Build + Package + Install",
-      "type": "node-terminal",
-      "request": "launch",
-      "command": "npm run build && yes | npx vsce package --allow-missing-repository && code --install-extension $(ls -t chatai-*.vsix | head -n 1) --force",
-      "cwd": "${workspaceFolder}",
-      "env": {
-        "NODE_OPTIONS": ""
-      }
     }
   ]
 }
