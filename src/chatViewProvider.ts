@@ -52,7 +52,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private postInit(): void {
     if (!this.view) return;
     const config = vscode.workspace.getConfiguration('chatAi');
-    const models = config.get<string[]>('models', ['gemma4:31b', 'qwen3.6:35b']);
+    const models = config.get<string[]>('models', ['gemma4:31b', 'gemma4:12b', 'qwen3.6:35b']);
     const selected = config.get<string>('model', models[0] ?? 'gemma4:31b');
     this.view.webview.postMessage({ type: 'init', models, selected });
     this.postContext();

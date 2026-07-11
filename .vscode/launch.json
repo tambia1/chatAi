@@ -24,10 +24,24 @@
       "preLaunchTask": "${defaultBuildTask}"
     },
     {
+      "name": "Run ollama list",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "ollama list",
+      "cwd": "${workspaceFolder}"
+    },
+    {
       "name": "Run gemme4:31b",
       "type": "node-terminal",
       "request": "launch",
       "command": "ollama run gemma4:31b",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Run gemme4:12b",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "ollama run gemma4:12b",
       "cwd": "${workspaceFolder}"
     },
     {

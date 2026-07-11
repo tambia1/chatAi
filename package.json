@@ -68,6 +68,7 @@
           },
           "default": [
             "gemma4:31b",
+            "gemma4:12b",
             "qwen3.6:35b"
           ],
           "description": "List of Ollama models offered in the chat view's model picker."
