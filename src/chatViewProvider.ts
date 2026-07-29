@@ -136,7 +136,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (!response.ok || !response.body) {
         this.view.webview.postMessage({
           type: 'error',
-          text: `HTTP ${response.status} ${response.statusText}`,
+          text: `Could not reach Ollama at ${endpoint}. HTTP ${response.status} ${response.statusText}.\n` +
+            'Make sure `ollama serve` is running and chatAi.endpoint is set correctly.',
         });
         return;
       }
@@ -151,18 +152,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         buffer += decoder.decode(value, { stream: true });
         let newlineIndex: number;
         while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-          const line = buffer.slice(0, newlineIndex).trim();
+          let line = buffer.slice(0, newlineIndex).trim();
           buffer = buffer.slice(newlineIndex + 1);
           if (!line) continue;
+          if (line.startsWith('data:')) {
+            line = line.replace(/^data:\s*/, '');
+          }
+          if (!line || line === '[DONE]') continue;
           try {
             const chunk = JSON.parse(line);
             const message = chunk.message ?? {};
             if (typeof message.thinking === 'string' && message.thinking.length > 0) {
               this.view.webview.postMessage({ type: 'thinkingChunk', text: message.thinking });
             }
-            if (typeof message.content === 'string' && message.content.length > 0) {
-              assistantText += message.content;
-              this.view.webview.postMessage({ type: 'assistantChunk', text: message.content });
+
+            const content =
+              (typeof message.content === 'string' ? message.content : '') ||
+              (typeof chunk.response === 'string' ? chunk.response : '') ||
+              (typeof chunk.text === 'string' ? chunk.text : '');
+            if (content.length > 0) {
+              assistantText += content;
+              this.view.webview.postMessage({ type: 'assistantChunk', text: content });
             }
             if (chunk.done) {
               this.view.webview.postMessage({ type: 'assistantEnd' });
@@ -177,7 +187,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (error?.name === 'AbortError') {
         this.view.webview.postMessage({ type: 'assistantEnd' });
       } else {
-        this.view.webview.postMessage({ type: 'error', text: error?.message ?? String(caughtError) });
+        const message = error?.message ?? String(caughtError);
+        this.view.webview.postMessage({
+          type: 'error',
+          text: `Failed to fetch ${endpoint}: ${message}.\n` +
+            'Make sure `ollama serve` is running and the endpoint matches chatAi.endpoint.',
+        });
       }
     } finally {
       this.currentAbort = undefined;

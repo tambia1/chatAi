@@ -128,12 +128,12 @@
 
     const thinking = document.createElement('div');
     thinking.className = 'thinking';
-    thinking.hidden = true;
     const thinkingHeader = document.createElement('div');
     thinkingHeader.className = 'thinking-header';
     thinkingHeader.textContent = 'Thinking...';
     const thinkingContent = document.createElement('div');
     thinkingContent.className = 'thinking-content';
+    thinkingContent.textContent = 'Waiting for response...';
     const thinkingFooter = document.createElement('div');
     thinkingFooter.className = 'thinking-footer';
     thinkingFooter.textContent = '...done thinking.';
