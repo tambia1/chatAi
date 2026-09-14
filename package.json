@@ -2,7 +2,7 @@
   "name": "chatai",
   "displayName": "chatAi",
   "description": "Chat with your local AI model from VS Code.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "local",
   "icon": "media/chatAi.png",
   "engines": {
@@ -113,6 +113,43 @@
             "**/pnpm-lock.yaml"
           ],
           "description": "Glob patterns excluded from the workspace file tree (in addition to VS Code's files.exclude)."
+        },
+        "chatAi.toolPermissions": {
+          "type": "object",
+          "default": {
+            "read_file": "read",
+            "list_dir": "read",
+            "edit_file": "write",
+            "create_file": "write",
+            "create_folder": "write",
+            "rename_file": "write",
+            "rename_folder": "write",
+            "delete_file": "delete",
+            "delete_folder": "delete",
+            "git_status": "git",
+            "git_pull": "git",
+            "git_create_branch": "git",
+            "git_merge": "git",
+            "git_switch": "git",
+            "git_log": "git",
+            "run_command": "run"
+          },
+          "description": "Permission level required by each workspace tool. Use false to disable a tool or a stronger level such as delete/git/run to gate risky capabilities."
+        },
+        "chatAi.toolConfirmations": {
+          "type": "object",
+          "default": {
+            "delete_file": true,
+            "delete_folder": true,
+            "rename_file": true,
+            "rename_folder": true,
+            "git_pull": true,
+            "git_create_branch": true,
+            "git_merge": true,
+            "git_switch": true,
+            "run_command": true
+          },
+          "description": "Set which tools require an explicit confirm flag before execution."
         }
       }
     }

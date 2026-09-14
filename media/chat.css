@@ -9,6 +9,28 @@ body {
   background: var(--vscode-sideBar-background);
 }
 
+.chat-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--vscode-panel-border, transparent);
+  background: var(--vscode-sideBar-background);
+}
+
+.chat-title {
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.chat-version {
+  margin-left: auto;
+  font-size: calc(var(--vscode-font-size) * 0.8);
+  opacity: 0.75;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
 body {
   display: flex;
   flex-direction: column;
@@ -111,6 +133,113 @@ body {
   font-style: italic;
   border: 1px solid var(--vscode-inputValidation-errorBorder, transparent);
   background: var(--vscode-inputValidation-errorBackground, transparent);
+}
+
+.approval {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px;
+  padding: 10px;
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, transparent));
+  background: var(--vscode-editorWidget-background, var(--vscode-input-background));
+  border-radius: 6px;
+}
+
+.approval[hidden] {
+  display: none;
+}
+
+.approval-header {
+  font-weight: 600;
+}
+
+.approval-summary {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+.approval-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.approval-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.approval-group-title {
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--vscode-panel-border, transparent);
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  font-size: 0.9em;
+  font-weight: 600;
+}
+
+.approval-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+.approval-option input {
+  margin: 0;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.approval-actions .primary {
+  background: var(--vscode-button-background);
+}
+
+.approval-actions .secondary {
+  background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+}
+
+.context-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 8px 0;
+}
+
+.tool-access-button {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vscode-foreground, #ffffff);
+}
+
+.tool-access-button svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 0;
+  flex: 1;
 }
 
 #composer {

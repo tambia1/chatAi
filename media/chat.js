@@ -8,8 +8,16 @@
   const modelSelectElement = document.getElementById('model');
   const contextElement = document.getElementById('context');
   const contextSizeElement = document.getElementById('contextSize');
+  const approvalElement = document.getElementById('approval');
+  const approvalSummaryElement = document.getElementById('approvalSummary');
+  const approvalListElement = document.getElementById('approvalList');
+  const approveToolButton = document.getElementById('approveTool');
+  const allowSessionToolButton = document.getElementById('allowSessionTool');
+  const denyToolButton = document.getElementById('denyTool');
+  const toolAccessButton = document.getElementById('toolAccessButton');
 
   let currentAssistant = null;
+  let approvalMode = null;
 
   const FILE_ICON_SVG =
     '<svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" aria-hidden="true">' +
@@ -165,6 +173,91 @@
     input.disabled = streaming;
   }
 
+  function showToolPermissions(tools, selectedNames) {
+    approvalMode = 'config';
+    approvalSummaryElement.textContent = 'Choose which tools are allowed for this session';
+    approvalListElement.hidden = false;
+    approvalListElement.innerHTML = '';
+
+    const selected = new Set(selectedNames || []);
+    const groups = new Map();
+    for (const tool of tools) {
+      const groupName = tool.group || 'Other';
+      if (!groups.has(groupName)) groups.set(groupName, []);
+      groups.get(groupName).push(tool);
+    }
+
+    for (const [groupName, groupTools] of groups) {
+      const group = document.createElement('div');
+      group.className = 'approval-group';
+
+      const heading = document.createElement('div');
+      heading.className = 'approval-group-title';
+      heading.textContent = groupName;
+      group.appendChild(heading);
+
+      for (const tool of groupTools) {
+        const row = document.createElement('label');
+        row.className = 'approval-option';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = selected.has(tool.name) || tool.requiresConfirmation === false;
+        checkbox.value = tool.name;
+
+        const label = document.createElement('span');
+        label.textContent = tool.name;
+
+        row.appendChild(checkbox);
+        row.appendChild(label);
+        group.appendChild(row);
+      }
+      approvalListElement.appendChild(group);
+    }
+
+    approveToolButton.textContent = 'Save approvals';
+    allowSessionToolButton.hidden = true;
+    denyToolButton.textContent = 'Close';
+    approvalElement.hidden = false;
+  }
+
+  function hideApproval() {
+    approvalMode = null;
+    approvalListElement.innerHTML = '';
+    approvalListElement.hidden = true;
+    approvalElement.hidden = true;
+  }
+
+  approveToolButton.addEventListener('click', () => {
+    if (approvalMode === 'config') {
+      const selected = Array.from(approvalListElement.querySelectorAll('input:checked')).map((input) => input.value);
+      vscode.postMessage({ type: 'saveToolApprovals', tools: selected });
+      hideApproval();
+      return;
+    }
+    hideApproval();
+  });
+
+  allowSessionToolButton.addEventListener('click', () => {
+    hideApproval();
+  });
+
+  denyToolButton.addEventListener('click', () => {
+    if (approvalMode === 'config') {
+      hideApproval();
+      return;
+    }
+    hideApproval();
+  });
+
+  toolAccessButton.addEventListener('click', () => {
+    if (!approvalElement.hidden) {
+      hideApproval();
+      return;
+    }
+    vscode.postMessage({ type: 'requestToolPermissionState' });
+  });
+
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     const text = input.value.trim();
@@ -233,8 +326,14 @@
         currentAssistant = null;
         setStreaming(false);
         break;
+      case 'toolPermissionState': {
+        const selected = (message.tools || []).filter((tool) => tool.selected).map((tool) => tool.name);
+        showToolPermissions(message.tools || [], selected);
+        break;
+      }
       case 'clear':
         messagesElement.innerHTML = '';
+        hideApproval();
         currentAssistant = null;
         setStreaming(false);
         break;

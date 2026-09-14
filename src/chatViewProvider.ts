@@ -1,9 +1,341 @@
 import * as vscode from 'vscode';
+import { exec, execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 interface ChatTurn {
   role: 'user' | 'assistant';
   content: string;
 }
+
+interface ToolCall {
+  function?: {
+    name?: string;
+    arguments?: Record<string, unknown> | string;
+  };
+}
+
+interface OllamaMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;
+  tool_calls?: ToolCall[];
+}
+
+type ToolPermission = 'read' | 'write' | 'delete' | 'git' | 'run';
+
+interface WorkspaceToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    permission: ToolPermission;
+    requiresConfirmation: boolean;
+    parameters: {
+      type: 'object';
+      properties: Record<string, { type: string; description: string }>;
+      required: string[];
+    };
+  };
+}
+
+interface WorkspaceToolGroup {
+  name: string;
+  tools: WorkspaceToolDefinition[];
+}
+
+const WORKSPACE_TOOL_GROUPS: Record<string, WorkspaceToolGroup> = {
+  files: {
+    name: 'Files',
+    tools: [
+      {
+        type: 'function',
+        function: {
+          name: 'read_file',
+          description: 'Read a file in the current VS Code workspace.',
+          permission: 'read',
+          requiresConfirmation: false,
+          parameters: {
+            type: 'object',
+            properties: { path: { type: 'string', description: 'Workspace-relative file path.' } },
+            required: ['path'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'edit_file',
+          description: 'Replace exactly one occurrence of oldText with newText in a workspace file and save it.',
+          permission: 'write',
+          requiresConfirmation: false,
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Workspace-relative file path.' },
+              oldText: { type: 'string', description: 'Exact existing text to replace.' },
+              newText: { type: 'string', description: 'Replacement text.' },
+            },
+            required: ['path', 'oldText', 'newText'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'create_file',
+          description: 'Create a new file in the current VS Code workspace.',
+          permission: 'write',
+          requiresConfirmation: false,
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Workspace-relative file path for the new file.' },
+              content: { type: 'string', description: 'File contents to write.' },
+            },
+            required: ['path', 'content'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'rename_file',
+          description: 'Rename or move a file within the current VS Code workspace.',
+          permission: 'write',
+          requiresConfirmation: false,
+          parameters: {
+            type: 'object',
+            properties: {
+              fromPath: { type: 'string', description: 'Current workspace-relative file path.' },
+              toPath: { type: 'string', description: 'New workspace-relative file path.' },
+              confirm: { type: 'boolean', description: 'Set to true to confirm the rename.' },
+            },
+            required: ['fromPath', 'toPath'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'delete_file',
+          description: 'Delete a file from the current VS Code workspace.',
+          permission: 'delete',
+          requiresConfirmation: true,
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Workspace-relative file path to delete.' },
+              confirm: { type: 'boolean', description: 'Set to true to confirm the deletion.' },
+            },
+            required: ['path'],
+          },
+        },
+      },
+    ],
+  },
+
+  folders: {
+    name: 'Folders',
+    tools: [
+      {
+        type: 'function',
+        function: {
+          name: 'list_dir',
+          description: 'List the files and folders inside a workspace directory.',
+          permission: 'read',
+          requiresConfirmation: false,
+          parameters: {
+            type: 'object',
+            properties: { path: { type: 'string', description: 'Workspace-relative directory path.' } },
+            required: ['path'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'create_folder',
+          description: 'Create a new folder in the current VS Code workspace.',
+          permission: 'write',
+          requiresConfirmation: false,
+          parameters: {
+            type: 'object',
+            properties: { path: { type: 'string', description: 'Workspace-relative folder path.' } },
+            required: ['path'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'rename_folder',
+          description: 'Rename or move a folder within the current VS Code workspace.',
+          permission: 'write',
+          requiresConfirmation: true,
+          parameters: {
+            type: 'object',
+            properties: {
+              fromPath: { type: 'string', description: 'Current workspace-relative folder path.' },
+              toPath: { type: 'string', description: 'New workspace-relative folder path.' },
+              confirm: { type: 'boolean', description: 'Set to true to confirm the rename.' },
+            },
+            required: ['fromPath', 'toPath'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'delete_folder',
+          description: 'Delete a folder from the current VS Code workspace.',
+          permission: 'delete',
+          requiresConfirmation: true,
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Workspace-relative folder path to delete.' },
+              confirm: { type: 'boolean', description: 'Set to true to confirm the deletion.' },
+            },
+            required: ['path'],
+          },
+        },
+      },
+    ],
+  },
+
+  git: {
+    name: 'Git',
+    tools: [
+      {
+        type: 'function',
+        function: {
+          name: 'git_status',
+          description: 'Show the current git status for the workspace repository.',
+          permission: 'git',
+          requiresConfirmation: false,
+          parameters: {
+            type: 'object',
+            properties: { confirm: { type: 'boolean', description: 'Set to true to confirm the git operation.' } },
+            required: [],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'git_pull',
+          description: 'Pull the current branch from the configured git remote.',
+          permission: 'git',
+          requiresConfirmation: true,
+          parameters: {
+            type: 'object',
+            properties: {
+              confirm: { type: 'boolean', description: 'Set to true to confirm the git pull.' },
+              branch: { type: 'string', description: 'Optional branch name to pull.' },
+            },
+            required: [],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'git_create_branch',
+          description: 'Create a new git branch from the current HEAD.',
+          permission: 'git',
+          requiresConfirmation: true,
+          parameters: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'Branch name to create.' },
+              confirm: { type: 'boolean', description: 'Set to true to confirm the branch creation.' },
+            },
+            required: ['name'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'git_merge',
+          description: 'Merge another branch into the current branch.',
+          permission: 'git',
+          requiresConfirmation: true,
+          parameters: {
+            type: 'object',
+            properties: {
+              branch: { type: 'string', description: 'Branch name to merge into the current branch.' },
+              confirm: { type: 'boolean', description: 'Set to true to confirm the merge.' },
+            },
+            required: ['branch'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'git_switch',
+          description: 'Switch the repository to a different branch.',
+          permission: 'git',
+          requiresConfirmation: true,
+          parameters: {
+            type: 'object',
+            properties: {
+              branch: { type: 'string', description: 'Branch to switch to.' },
+              confirm: { type: 'boolean', description: 'Set to true to confirm the switch.' },
+            },
+            required: ['branch'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'git_log',
+          description: 'Show the recent git commit history for the repository.',
+          permission: 'git',
+          requiresConfirmation: false,
+          parameters: {
+            type: 'object',
+            properties: {
+              maxCount: { type: 'number', description: 'Maximum number of commits to show.' },
+              confirm: { type: 'boolean', description: 'Set to true to confirm the git log request.' },
+            },
+            required: [],
+          },
+        },
+      },
+    ],
+  },
+
+  commands: {
+    name: 'Commands',
+    tools: [
+      {
+        type: 'function',
+        function: {
+          name: 'run_command',
+          description: 'Run a shell command in the workspace root.',
+          permission: 'run',
+          requiresConfirmation: true,
+          parameters: {
+            type: 'object',
+            properties: {
+              command: { type: 'string', description: 'Shell command to run from the workspace root.' },
+              cwd: { type: 'string', description: 'Optional workspace-relative directory to run the command from.' },
+              confirm: { type: 'boolean', description: 'Set to true to confirm the command.' },
+            },
+            required: ['command'],
+          },
+        },
+      },
+    ],
+  },
+};
+
+const WORKSPACE_TOOLS: WorkspaceToolDefinition[] = Object.values(WORKSPACE_TOOL_GROUPS).flatMap((group) => group.tools);
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'chatAi.chat';
@@ -12,8 +344,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private history: ChatTurn[] = [];
   private currentAbort?: AbortController;
   private lastEditor?: vscode.TextEditor;
+  private sessionAllowlist = new Set<string>();
 
-  constructor(private readonly extensionUri: vscode.Uri) {
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    private readonly extensionVersion: string,
+  ) {
     this.lastEditor = vscode.window.activeTextEditor;
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor) this.lastEditor = editor;
@@ -45,6 +381,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case 'cancel':
           this.currentAbort?.abort();
           break;
+        case 'requestToolPermissionState': {
+          this.postToolPermissionState();
+          break;
+        }
+        case 'saveToolApprovals': {
+          const incoming = Array.isArray(message.tools) ? message.tools : [];
+          const nextAllowlist = new Set<string>();
+          for (const toolName of incoming) {
+            if (typeof toolName === 'string' && WORKSPACE_TOOLS.some((tool) => tool.function.name === toolName)) {
+              nextAllowlist.add(toolName);
+            }
+          }
+          this.sessionAllowlist = nextAllowlist;
+          break;
+        }
       }
     });
   }
@@ -99,6 +450,59 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.view?.webview.postMessage({ type: 'clear' });
   }
 
+  private resolveWorkspaceUri(path: string): vscode.Uri | null {
+    const root = vscode.workspace.workspaceFolders?.[0];
+    if (!root) return null;
+    if (!path || path === '.') {
+      return root.uri;
+    }
+    if (path.startsWith('/') || path.split(/[\\/]/).includes('..')) {
+      return null;
+    }
+    return vscode.Uri.joinPath(root.uri, ...path.split(/[\\/]/).filter(Boolean));
+  }
+
+  private getToolPermission(name: string): ToolPermission | undefined {
+    const tool = WORKSPACE_TOOLS.find((candidate) => candidate.function.name === name);
+    return tool?.function.permission;
+  }
+
+  private isToolEnabled(name: string): { ok: true } | { ok: false; reason: string } {
+    const tool = WORKSPACE_TOOLS.find((candidate) => candidate.function.name === name);
+    if (!tool) return { ok: false, reason: `Unknown tool: ${name}` };
+    const requiredPermission = tool.function.permission;
+
+    const config = vscode.workspace.getConfiguration('chatAi');
+    const permissions = config.get<Record<string, string | boolean>>('toolPermissions', {});
+    const configValue = permissions[name];
+    if (configValue === false) return { ok: false, reason: `Tool ${name} is disabled by configuration.` };
+    if (typeof configValue === 'string') {
+      const order: Record<ToolPermission, number> = { read: 1, write: 2, delete: 3, git: 4, run: 5 };
+      const normalized = configValue.toLowerCase();
+      const allowedPermission = normalized === 'deny' || normalized === 'disabled' ? null : (normalized as ToolPermission);
+      if (!allowedPermission) return { ok: false, reason: `Tool ${name} is disabled by configuration.` };
+      if (order[allowedPermission] < order[requiredPermission]) {
+        return { ok: false, reason: `Tool ${name} requires permission '${requiredPermission}', but configuration only allows '${allowedPermission}'.` };
+      }
+    }
+    return { ok: true };
+  }
+
+  private postToolPermissionState(): void {
+    const tools = WORKSPACE_TOOLS.map((tool) => ({
+      name: tool.function.name,
+      group: this.getToolGroup(tool.function.name),
+      requiresConfirmation: !!tool.function.requiresConfirmation,
+      selected: this.sessionAllowlist.has(tool.function.name),
+    }));
+    this.view?.webview.postMessage({ type: 'toolPermissionState', tools });
+  }
+
+  private getToolGroup(name: string): string {
+    return Object.values(WORKSPACE_TOOL_GROUPS)
+      .find((group) => group.tools.some((tool) => tool.function.name === name))?.name ?? 'Other';
+  }
+
   private async handleSend(text: string, requestedModel?: string): Promise<void> {
     if (!text.trim() || !this.view) return;
 
@@ -118,6 +522,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     let assistantText = '';
     const controller = new AbortController();
     this.currentAbort = controller;
+    let ended = false;
 
     try {
       const response = await fetch(`${endpoint.replace(/\/$/, '')}/api/chat`, {
@@ -126,6 +531,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({
           model,
           messages,
+          tools: WORKSPACE_TOOLS,
           stream: true,
           think: true,
           options: { num_ctx: numCtx },
@@ -134,18 +540,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
 
       if (!response.ok || !response.body) {
-        this.view.webview.postMessage({
-          type: 'error',
-          text: `Could not reach Ollama at ${endpoint}. HTTP ${response.status} ${response.statusText}.\n` +
-            'Make sure `ollama serve` is running and chatAi.endpoint is set correctly.',
-        });
-        return;
+        throw new Error(`HTTP ${response.status} ${response.statusText}`);
       }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
 
+      let toolCalls: ToolCall[] = [];
+      let responseMessage: OllamaMessage = { role: 'assistant', content: '' };
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -161,9 +564,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (!line || line === '[DONE]') continue;
           try {
             const chunk = JSON.parse(line);
-            const message = chunk.message ?? {};
+            const message = chunk.message ?? { role: 'assistant', content: '' };
+            responseMessage.content += typeof message.content === 'string' ? message.content : '';
+            if (message.tool_calls) toolCalls.push(...message.tool_calls);
             if (typeof message.thinking === 'string' && message.thinking.length > 0) {
-              this.view.webview.postMessage({ type: 'thinkingChunk', text: message.thinking });
+              const thinking = message.thinking.replace(/<unused\d+>/g, '');
+              if (thinking) this.view.webview.postMessage({ type: 'thinkingChunk', text: thinking });
             }
 
             const content =
@@ -174,18 +580,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               assistantText += content;
               this.view.webview.postMessage({ type: 'assistantChunk', text: content });
             }
-            if (chunk.done) {
-              this.view.webview.postMessage({ type: 'assistantEnd' });
-            }
           } catch {
             // ignore non-JSON / partial lines
           }
         }
       }
+      if (responseMessage.content && !assistantText) {
+        assistantText += responseMessage.content;
+        this.view.webview.postMessage({ type: 'assistantChunk', text: responseMessage.content });
+      }
+      if (toolCalls.length) {
+        messages.push({ ...responseMessage, tool_calls: toolCalls });
+        for (const call of toolCalls) {
+          const result = await this.executeFileTool(call.function?.name ?? '', call.function?.arguments);
+          messages.push({ role: 'tool', content: result });
+        }
+        assistantText += await this.continueToolConversation(endpoint, model, numCtx, messages, controller.signal);
+      }
+      this.view.webview.postMessage({ type: 'assistantEnd' });
+      ended = true;
     } catch (caughtError: unknown) {
       const error = caughtError as { name?: string; message?: string };
       if (error?.name === 'AbortError') {
         this.view.webview.postMessage({ type: 'assistantEnd' });
+        ended = true;
       } else {
         const message = error?.message ?? String(caughtError);
         this.view.webview.postMessage({
@@ -195,6 +613,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         });
       }
     } finally {
+      if (!ended) this.view.webview.postMessage({ type: 'assistantEnd' });
       this.currentAbort = undefined;
       if (assistantText) {
         this.history.push({ role: 'assistant', content: assistantText });
@@ -202,8 +621,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private buildMessages(liveContext: string): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
-    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
+  private buildMessages(liveContext: string): OllamaMessage[] {
+    const messages: OllamaMessage[] = [];
+    messages.push({
+      role: 'system',
+      content: 'You are an editor assistant inside VS Code. When the user asks to change a file, use the provided file tools to make and save the change. Do not only describe a patch. Use exact oldText and newText, and reread a file if an edit does not match.',
+    });
     if (liveContext) {
       messages.push({ role: 'system', content: liveContext });
     }
@@ -211,6 +634,202 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       messages.push({ role: turn.role, content: turn.content });
     }
     return messages;
+  }
+
+  private async executeFileTool(name: string, rawArguments: Record<string, unknown> | string | undefined): Promise<string> {
+    let args: Record<string, unknown>;
+    try {
+      args = typeof rawArguments === 'string' ? JSON.parse(rawArguments) : (rawArguments ?? {});
+    } catch {
+      return JSON.stringify({ error: 'Tool arguments were not valid JSON.' });
+    }
+
+    const accessCheck = this.isToolEnabled(name);
+    if (!accessCheck.ok) return JSON.stringify({ error: accessCheck.reason });
+
+    const tool = WORKSPACE_TOOLS.find((candidate) => candidate.function.name === name);
+    if (tool?.function.requiresConfirmation && !this.sessionAllowlist.has(name) && args.confirm !== true) {
+      this.postToolPermissionState();
+      return JSON.stringify({ error: `Tool ${name} is not enabled for this session. Open Tool permissions with the lock button and enable it.` });
+    }
+
+    const root = vscode.workspace.workspaceFolders?.[0];
+    if (!root) return JSON.stringify({ error: 'No workspace folder is open.' });
+
+    try {
+      if (name === 'run_command') {
+        const command = typeof args.command === 'string' ? args.command.trim() : '';
+        const cwdPath = typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd : '.';
+        const cwdUri = this.resolveWorkspaceUri(cwdPath) ?? root.uri;
+        if (!command) return JSON.stringify({ error: 'A command is required.' });
+        const { stdout, stderr } = await execAsync(command, { cwd: cwdUri.fsPath, maxBuffer: 1024 * 1024 });
+        return JSON.stringify({ ok: true, command, cwd: cwdPath, output: [stdout, stderr].filter(Boolean).join('\n') || 'Command completed successfully.' });
+      }
+
+      if (name === 'git_status') {
+        const { stdout, stderr } = await execFileAsync('git', ['status', '--short', '--branch'], { cwd: root.uri.fsPath, maxBuffer: 1024 * 1024 });
+        return JSON.stringify({ ok: true, output: [stdout, stderr].filter(Boolean).join('\n') || 'Git status is clean.' });
+      }
+
+      if (name === 'git_pull') {
+        const branch = typeof args.branch === 'string' && args.branch.trim() ? args.branch.trim() : undefined;
+        const argsList = branch ? ['pull', '--ff-only', 'origin', branch] : ['pull', '--ff-only'];
+        const { stdout, stderr } = await execFileAsync('git', argsList, { cwd: root.uri.fsPath, maxBuffer: 1024 * 1024 });
+        return JSON.stringify({ ok: true, output: [stdout, stderr].filter(Boolean).join('\n') || 'Git pull completed.' });
+      }
+
+      if (name === 'git_create_branch') {
+        const branchName = typeof args.name === 'string' ? args.name.trim() : '';
+        if (!branchName) return JSON.stringify({ error: 'A branch name is required.' });
+        const { stdout, stderr } = await execFileAsync('git', ['checkout', '-b', branchName], { cwd: root.uri.fsPath, maxBuffer: 1024 * 1024 });
+        return JSON.stringify({ ok: true, output: [stdout, stderr].filter(Boolean).join('\n') || `Branch ${branchName} created.` });
+      }
+
+      if (name === 'git_merge') {
+        const branchName = typeof args.branch === 'string' ? args.branch.trim() : '';
+        if (!branchName) return JSON.stringify({ error: 'A branch name is required.' });
+        const { stdout, stderr } = await execFileAsync('git', ['merge', '--no-edit', branchName], { cwd: root.uri.fsPath, maxBuffer: 1024 * 1024 });
+        return JSON.stringify({ ok: true, output: [stdout, stderr].filter(Boolean).join('\n') || `Merged ${branchName}.` });
+      }
+
+      if (name === 'git_switch') {
+        const branchName = typeof args.branch === 'string' ? args.branch.trim() : '';
+        if (!branchName) return JSON.stringify({ error: 'A branch name is required.' });
+        const { stdout, stderr } = await execFileAsync('git', ['switch', branchName], { cwd: root.uri.fsPath, maxBuffer: 1024 * 1024 });
+        return JSON.stringify({ ok: true, output: [stdout, stderr].filter(Boolean).join('\n') || `Switched to ${branchName}.` });
+      }
+
+      if (name === 'git_log') {
+        const maxCount = typeof args.maxCount === 'number' ? args.maxCount : 20;
+        const { stdout, stderr } = await execFileAsync('git', ['log', '--oneline', '-n', String(maxCount)], { cwd: root.uri.fsPath, maxBuffer: 1024 * 1024 });
+        return JSON.stringify({ ok: true, output: [stdout, stderr].filter(Boolean).join('\n') || 'No git log output.' });
+      }
+
+      const path = typeof args.path === 'string' ? args.path : '';
+      if (!path) return JSON.stringify({ error: 'Use a valid workspace-relative path.' });
+      const uri = this.resolveWorkspaceUri(path);
+      if (!uri) return JSON.stringify({ error: 'Use a valid workspace-relative path.' });
+
+      if (name === 'rename_file' || name === 'rename_folder') {
+        const fromPath = typeof args.fromPath === 'string' ? args.fromPath : '';
+        const toPath = typeof args.toPath === 'string' ? args.toPath : '';
+        if (!fromPath || !toPath) return JSON.stringify({ error: 'Both fromPath and toPath are required.' });
+        const fromUri = this.resolveWorkspaceUri(fromPath);
+        const toUri = this.resolveWorkspaceUri(toPath);
+        if (!fromUri || !toUri) return JSON.stringify({ error: 'Use valid workspace-relative paths.' });
+        const parentUri = toUri.with({ path: toUri.path.substring(0, toUri.path.lastIndexOf('/')) || '/' });
+        try { await vscode.workspace.fs.stat(parentUri); } catch { await vscode.workspace.fs.createDirectory(parentUri); }
+        await vscode.workspace.fs.rename(fromUri, toUri, { overwrite: false });
+        return JSON.stringify({ ok: true, fromPath, toPath, message: `${name === 'rename_file' ? 'File' : 'Folder'} renamed.` });
+      }
+
+      if (name === 'create_folder') {
+        const folderExists = await vscode.workspace.fs.stat(uri).then(() => true, () => false);
+        if (folderExists) return JSON.stringify({ error: 'Folder already exists.' });
+        let current = root.uri;
+        const segments = path.split(/[\\/]/).filter(Boolean);
+        for (const segment of segments) {
+          current = vscode.Uri.joinPath(current, segment);
+          try {
+            await vscode.workspace.fs.stat(current);
+          } catch {
+            await vscode.workspace.fs.createDirectory(current);
+          }
+        }
+        return JSON.stringify({ ok: true, path, message: 'Folder created.' });
+      }
+
+      if (name === 'delete_folder') {
+        await vscode.workspace.fs.delete(uri, { recursive: true, useTrash: false });
+        return JSON.stringify({ ok: true, path, message: 'Folder deleted.' });
+      }
+
+      if (name === 'delete_file') {
+        await vscode.workspace.fs.delete(uri, { recursive: false, useTrash: false });
+        return JSON.stringify({ ok: true, path, message: 'File deleted.' });
+      }
+
+      if (name === 'list_dir') {
+        const entries = await vscode.workspace.fs.readDirectory(uri);
+        return JSON.stringify({ ok: true, path, entries: entries.map(([name, type]) => ({ name, type })) });
+      }
+
+      if (name === 'create_file') {
+        const content = typeof args.content === 'string' ? args.content : '';
+        const fileExists = await vscode.workspace.fs.stat(uri).then(() => true, () => false);
+        if (fileExists) return JSON.stringify({ error: 'File already exists; use edit_file to update it.' });
+
+        const parentDir = uri.with({ path: uri.path.substring(0, uri.path.lastIndexOf('/')) || '/' });
+        let current = root.uri;
+        const segments = parentDir.path.split('/').filter(Boolean);
+        for (const segment of segments) {
+          current = vscode.Uri.joinPath(current, segment);
+          try {
+            await vscode.workspace.fs.stat(current);
+          } catch {
+            await vscode.workspace.fs.createDirectory(current);
+          }
+        }
+
+        await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
+        return JSON.stringify({ ok: true, path, message: 'File created.' });
+      }
+
+      const document = await vscode.workspace.openTextDocument(uri);
+      if (name === 'read_file') return JSON.stringify({ path, content: document.getText() });
+      if (name !== 'edit_file') return JSON.stringify({ error: `Unknown tool: ${name}` });
+
+      const oldText = typeof args.oldText === 'string' ? args.oldText : '';
+      const newText = typeof args.newText === 'string' ? args.newText : '';
+      const source = document.getText();
+      const start = source.indexOf(oldText);
+      if (start < 0) return JSON.stringify({ error: 'oldText was not found; reread the file and try again.' });
+      if (source.indexOf(oldText, start + 1) >= 0) {
+        return JSON.stringify({ error: 'oldText matched more than once; include more surrounding text.' });
+      }
+      const edit = new vscode.WorkspaceEdit();
+      edit.replace(uri, new vscode.Range(document.positionAt(start), document.positionAt(start + oldText.length)), newText);
+      if (!await vscode.workspace.applyEdit(edit) || !await document.save()) {
+        return JSON.stringify({ error: 'VS Code could not apply or save the edit.' });
+      }
+      return JSON.stringify({ ok: true, path, message: 'File edited and saved.' });
+    } catch (error) {
+      return JSON.stringify({ error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  private async continueToolConversation(
+    endpoint: string,
+    model: string,
+    numCtx: number,
+    messages: OllamaMessage[],
+    signal: AbortSignal,
+  ): Promise<string> {
+    let finalText = '';
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const response = await fetch(`${endpoint.replace(/\/$/, '')}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, messages, tools: WORKSPACE_TOOLS, stream: false, think: true, options: { num_ctx: numCtx } }),
+        signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      const payload = await response.json() as { message?: OllamaMessage };
+      const message = payload.message ?? { role: 'assistant', content: '' };
+      messages.push(message);
+      if (message.tool_calls?.length) {
+        for (const call of message.tool_calls) {
+          messages.push({ role: 'tool', content: await this.executeFileTool(call.function?.name ?? '', call.function?.arguments) });
+        }
+        continue;
+      }
+      if (message.content) {
+        finalText += message.content;
+        this.view?.webview.postMessage({ type: 'assistantChunk', text: message.content });
+      }
+      break;
+    }
+    return finalText;
   }
 
   private async getEditorContext(): Promise<{
@@ -329,9 +948,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 <link rel="stylesheet" href="${cssUri}" />
 </head>
 <body>
+<div class="chat-topbar">
+  <div class="chat-title">chatAi</div>
+  <div class="chat-version">v${this.extensionVersion}</div>
+</div>
 <div id="messages"></div>
+<div id="approval" class="approval" hidden>
+  <div class="approval-header">Tool permissions</div>
+  <div id="approvalSummary" class="approval-summary"></div>
+  <div id="approvalList" class="approval-list"></div>
+  <div class="approval-actions">
+    <button type="button" id="approveTool" class="primary">Approve</button>
+    <button type="button" id="allowSessionTool">Allow for this session</button>
+    <button type="button" id="denyTool" class="secondary">Deny</button>
+  </div>
+</div>
 <form id="composer">
-  <div id="context" class="context" hidden></div>
+  <div class="context-row">
+    <button type="button" id="toolAccessButton" class="tool-access-button" aria-label="Open tool permissions" title="Tool permissions">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 7V5a3 3 0 1 1 6 0v2h1a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h1zm1.5 0h3V5a1.5 1.5 0 0 0-3 0v2zM8 9.5a1 1 0 0 0-.5 1.866V13h1v-1.634A1 1 0 0 0 8 9.5z"/></svg>
+    </button>
+    <div id="context" class="context" hidden></div>
+  </div>
   <div id="contextSize" class="context-size" hidden></div>
   <textarea id="input" rows="2" placeholder="Ask chatAi..." autofocus></textarea>
   <div class="row">
