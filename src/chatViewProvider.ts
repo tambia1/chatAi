@@ -10,6 +10,17 @@ interface ChatTurn {
   content: string;
 }
 
+interface ChatRequestSettings {
+  includeActiveFile: boolean;
+  includeTree: boolean;
+  includeOpenTabs: boolean;
+  includeTools: boolean;
+  think: boolean;
+  numCtx: number;
+  computeMode: 'cpu' | 'auto' | 'layers';
+  gpuLayers: number;
+}
+
 interface ToolCall {
   function?: {
     name?: string;
@@ -345,6 +356,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private currentAbort?: AbortController;
   private lastEditor?: vscode.TextEditor;
   private sessionAllowlist = new Set<string>();
+  private sessionSettings?: ChatRequestSettings;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -376,16 +388,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.postInit();
           break;
         case 'send':
-          await this.handleSend(String(message.text ?? ''), message.model ? String(message.model) : undefined);
+          await this.handleSend(
+            String(message.text ?? ''),
+            message.model ? String(message.model) : undefined,
+            this.normalizeRequestSettings(message.settings),
+          );
           break;
         case 'cancel':
           this.currentAbort?.abort();
           break;
-        case 'requestToolPermissionState': {
-          this.postToolPermissionState();
+        case 'requestSettingsState': {
+          this.postSettingsState();
           break;
         }
-        case 'saveToolApprovals': {
+        case 'saveSettings': {
           const incoming = Array.isArray(message.tools) ? message.tools : [];
           const nextAllowlist = new Set<string>();
           for (const toolName of incoming) {
@@ -394,6 +410,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             }
           }
           this.sessionAllowlist = nextAllowlist;
+          this.sessionSettings = this.normalizeRequestSettings(message.settings);
           break;
         }
       }
@@ -403,9 +420,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private postInit(): void {
     if (!this.view) return;
     const config = vscode.workspace.getConfiguration('chatAi');
-    const models = config.get<string[]>('models', ['gemma4:31b', 'gemma4:12b', 'qwen3.6:35b']);
-    const selected = config.get<string>('model', models[0] ?? 'gemma4:31b');
-    this.view.webview.postMessage({ type: 'init', models, selected });
+    const models = config.get<string[]>('models', ['gemma4:12b', 'gemma4:31b', 'qwen3.6:35b']);
+    const selected = config.get<string>('model', models[0] ?? 'gemma4:12b');
+    const numCtx = config.get<number>('numCtx', 2048);
+    this.view.webview.postMessage({ type: 'init', models, selected, numCtx });
     this.postContext();
   }
 
@@ -488,14 +506,53 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return { ok: true };
   }
 
-  private postToolPermissionState(): void {
-    const tools = WORKSPACE_TOOLS.map((tool) => ({
-      name: tool.function.name,
-      group: this.getToolGroup(tool.function.name),
-      requiresConfirmation: !!tool.function.requiresConfirmation,
-      selected: this.sessionAllowlist.has(tool.function.name),
-    }));
-    this.view?.webview.postMessage({ type: 'toolPermissionState', tools });
+  private postSettingsState(): void {
+    const config = vscode.workspace.getConfiguration('chatAi');
+    const settings: ChatRequestSettings = this.sessionSettings ?? {
+      includeActiveFile: false,
+      includeTree: config.get<boolean>('context.includeTree', false),
+      includeOpenTabs: config.get<boolean>('context.includeOpenTabs', false),
+      includeTools: false,
+      think: false,
+      numCtx: config.get<number>('numCtx', 2048),
+      computeMode: 'cpu',
+      gpuLayers: 0,
+    };
+    this.view?.webview.postMessage({
+      type: 'settingsState',
+      tools: WORKSPACE_TOOLS.map((tool) => ({
+        name: tool.function.name,
+        group: this.getToolGroup(tool.function.name),
+        requiresConfirmation: !!tool.function.requiresConfirmation,
+        selected: this.sessionAllowlist.has(tool.function.name),
+      })),
+      settings,
+    });
+  }
+
+  private normalizeRequestSettings(value: unknown): ChatRequestSettings {
+    const config = vscode.workspace.getConfiguration('chatAi');
+    const incoming = value && typeof value === 'object' ? value as Partial<ChatRequestSettings> : {};
+    const configuredNumCtx = config.get<number>('numCtx', 2048);
+    const numCtx = [2048, 4096, 8192, 16384].includes(incoming.numCtx ?? 0)
+      ? incoming.numCtx!
+      : configuredNumCtx;
+    const computeMode = incoming.computeMode === 'auto' || incoming.computeMode === 'layers'
+      ? incoming.computeMode
+      : 'cpu';
+    const gpuLayers = Number.isInteger(incoming.gpuLayers) && incoming.gpuLayers! >= 1 && incoming.gpuLayers! <= 128
+      ? incoming.gpuLayers!
+      : 1;
+    return {
+      includeActiveFile: incoming.includeActiveFile === true,
+      includeTree: incoming.includeTree === true,
+      includeOpenTabs: incoming.includeOpenTabs === true,
+      includeTools: incoming.includeTools === true,
+      think: incoming.think === true,
+      numCtx,
+      computeMode,
+      gpuLayers,
+    };
   }
 
   private getToolGroup(name: string): string {
@@ -503,18 +560,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .find((group) => group.tools.some((tool) => tool.function.name === name))?.name ?? 'Other';
   }
 
-  private async handleSend(text: string, requestedModel?: string): Promise<void> {
+  private async handleSend(text: string, requestedModel?: string, requestedSettings?: ChatRequestSettings): Promise<void> {
     if (!text.trim() || !this.view) return;
 
+    const startedAt = Date.now();
     this.history.push({ role: 'user', content: text });
     this.view.webview.postMessage({ type: 'user', text });
     this.view.webview.postMessage({ type: 'assistantStart' });
 
     const config = vscode.workspace.getConfiguration('chatAi');
     const endpoint = config.get<string>('endpoint', 'http://localhost:11434');
-    const model = requestedModel?.trim() || config.get<string>('model', 'gemma4:31b');
-    const numCtx = config.get<number>('numCtx', 32768);
-    const editorContext = await this.getEditorContext();
+    const model = requestedModel?.trim() || config.get<string>('model', 'gemma4:12b');
+    const settings = requestedSettings ?? this.sessionSettings ?? this.normalizeRequestSettings(undefined);
+    this.sessionSettings = settings;
+    const numCtx = settings.numCtx;
+    const editorContext = await this.getEditorContext(
+      Math.max(1024, numCtx * 4 - 1024),
+      settings.includeActiveFile,
+      settings.includeTree,
+      settings.includeOpenTabs,
+    );
     const messages = this.buildMessages(editorContext.text);
     const conversation = this.history.reduce((sum, turn) => sum + turn.content.length, 0);
     this.postContextSize(messages, numCtx, { ...editorContext.parts, conversation });
@@ -531,10 +596,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         body: JSON.stringify({
           model,
           messages,
-          tools: WORKSPACE_TOOLS,
+          tools: settings.includeTools ? WORKSPACE_TOOLS : [],
           stream: true,
-          think: true,
-          options: { num_ctx: numCtx, num_gpu: 0 },
+          think: settings.think,
+          options: this.getOllamaOptions(settings),
         }),
         signal: controller.signal,
       });
@@ -595,14 +660,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           const result = await this.executeFileTool(call.function?.name ?? '', call.function?.arguments);
           messages.push({ role: 'tool', content: result });
         }
-        assistantText += await this.continueToolConversation(endpoint, model, numCtx, messages, controller.signal);
+        assistantText += await this.continueToolConversation(endpoint, model, settings, messages, controller.signal);
       }
-      this.view.webview.postMessage({ type: 'assistantEnd' });
+      this.view.webview.postMessage({ type: 'assistantEnd', durationMs: Date.now() - startedAt });
       ended = true;
     } catch (caughtError: unknown) {
       const error = caughtError as { name?: string; message?: string };
       if (error?.name === 'AbortError') {
-        this.view.webview.postMessage({ type: 'assistantEnd' });
+        this.view.webview.postMessage({ type: 'assistantEnd', durationMs: Date.now() - startedAt });
         ended = true;
       } else {
         const message = error?.message ?? String(caughtError);
@@ -613,7 +678,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         });
       }
     } finally {
-      if (!ended) this.view.webview.postMessage({ type: 'assistantEnd' });
+      if (!ended) this.view.webview.postMessage({ type: 'assistantEnd', durationMs: Date.now() - startedAt });
       this.currentAbort = undefined;
       if (assistantText) {
         this.history.push({ role: 'assistant', content: assistantText });
@@ -649,8 +714,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const tool = WORKSPACE_TOOLS.find((candidate) => candidate.function.name === name);
     if (tool?.function.requiresConfirmation && !this.sessionAllowlist.has(name) && args.confirm !== true) {
-      this.postToolPermissionState();
-      return JSON.stringify({ error: `Tool ${name} is not enabled for this session. Open Tool permissions with the lock button and enable it.` });
+      this.postSettingsState();
+      return JSON.stringify({ error: `Tool ${name} is not enabled for this session. Open Chat settings with the settings button and enable it.` });
     }
 
     const root = vscode.workspace.workspaceFolders?.[0];
@@ -801,7 +866,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async continueToolConversation(
     endpoint: string,
     model: string,
-    numCtx: number,
+    settings: ChatRequestSettings,
     messages: OllamaMessage[],
     signal: AbortSignal,
   ): Promise<string> {
@@ -810,7 +875,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const response = await fetch(`${endpoint.replace(/\/$/, '')}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages, tools: WORKSPACE_TOOLS, stream: false, think: true, options: { num_ctx: numCtx, num_gpu: 0 } }),
+        body: JSON.stringify({ model, messages, tools: settings.includeTools ? WORKSPACE_TOOLS : [], stream: false, think: settings.think, options: this.getOllamaOptions(settings) }),
         signal,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
@@ -832,35 +897,52 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return finalText;
   }
 
-  private async getEditorContext(): Promise<{
+  private getOllamaOptions(settings: ChatRequestSettings): Record<string, number> {
+    const options: Record<string, number> = { num_ctx: settings.numCtx };
+    if (settings.computeMode === 'cpu') options.num_gpu = 0;
+    if (settings.computeMode === 'layers') options.num_gpu = settings.gpuLayers;
+    return options;
+  }
+
+  private async getEditorContext(
+    maxBytes: number,
+    includeActiveFile: boolean,
+    includeTree: boolean,
+    includeOpenTabs: boolean,
+  ): Promise<{
     text: string;
     parts: { activeFile: number; tree: number; openTabs: number };
   }> {
     const sections: string[] = [];
     const parts = { activeFile: 0, tree: 0, openTabs: 0 };
 
-    const active = this.getActiveFileContext();
-    if (active) {
-      parts.activeFile = active.length;
-      sections.push(active);
-    }
+    const appendSection = (section: string, part: keyof typeof parts): void => {
+      if (!section || maxBytes <= 0) return;
+      const separatorBytes = sections.length ? 2 : 0;
+      const remaining = maxBytes - sections.reduce((sum, item) => sum + item.length, 0) - separatorBytes;
+      if (remaining <= 0) return;
+      const value = section.length > remaining
+        ? section.slice(0, Math.max(0, remaining - 32)) + '\n[Context truncated]'
+        : section;
+      sections.push(value);
+      parts[part] += value.length;
+    };
 
-    const config = vscode.workspace.getConfiguration('chatAi');
-    const includeTree = config.get<boolean>('context.includeTree', true);
-    const includeOpenTabs = config.get<boolean>('context.includeOpenTabs', true);
+    const active = includeActiveFile ? this.getActiveFileContext() : '';
+    if (active) {
+      appendSection(active, 'activeFile');
+    }
 
     if (includeTree) {
       const tree = await this.getWorkspaceTree();
       if (tree) {
-        parts.tree = tree.length;
-        sections.push(tree);
+        appendSection(tree, 'tree');
       }
     }
     if (includeOpenTabs) {
       const tabs = await this.getOpenTabsContents();
       if (tabs) {
-        parts.openTabs = tabs.length;
-        sections.push(tabs);
+        appendSection(tabs, 'openTabs');
       }
     }
     return { text: sections.join('\n\n'), parts };
@@ -953,20 +1035,47 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <div class="chat-version">v${this.extensionVersion}</div>
 </div>
 <div id="messages"></div>
-<div id="approval" class="approval" hidden>
-  <div class="approval-header">Tool permissions</div>
+<div id="approval" class="approval settings-panel" hidden>
+  <div class="approval-header">Chat settings</div>
   <div id="approvalSummary" class="approval-summary"></div>
-  <div id="approvalList" class="approval-list"></div>
+  <div class="settings-group">
+    <div class="settings-section-title">Permissions</div>
+    <div id="approvalList" class="approval-list"></div>
+  </div>
+  <div class="settings-group">
+    <div class="settings-section-title">Context &amp; response</div>
+    <label class="approval-option"><input type="checkbox" id="includeActiveFile"> Active file</label>
+    <label class="approval-option"><input type="checkbox" id="includeTree"> Workspace files and folders</label>
+    <label class="approval-option"><input type="checkbox" id="includeOpenTabs"> Open tabs</label>
+    <label class="approval-option"><input type="checkbox" id="includeTools"> Tools</label>
+    <label class="approval-option"><input type="checkbox" id="think"> Thinking</label>
+    <label class="settings-select-row" for="computeMode">
+      <span>Compute</span>
+      <select id="computeMode" aria-label="Compute mode">
+        <option value="cpu" selected>CPU</option>
+        <option value="auto">Auto</option>
+        <option value="layers">GPU layers</option>
+      </select>
+    </label>
+    <label class="settings-select-row" for="gpuLayers">
+      <span>GPU layers</span>
+      <input id="gpuLayers" type="number" min="1" max="128" value="1" aria-label="GPU layers" disabled>
+    </label>
+    <label class="settings-select-row" for="contextSizeSelect">
+      <span>Context size</span>
+      <select id="contextSizeSelect" aria-label="Context size"></select>
+    </label>
+  </div>
   <div class="approval-actions">
-    <button type="button" id="approveTool" class="primary">Approve</button>
-    <button type="button" id="allowSessionTool">Allow for this session</button>
-    <button type="button" id="denyTool" class="secondary">Deny</button>
+    <button type="button" id="approveTool" class="primary">Save settings</button>
+    <button type="button" id="allowSessionTool" hidden>Allow for this session</button>
+    <button type="button" id="denyTool" class="secondary">Close</button>
   </div>
 </div>
 <form id="composer">
   <div class="context-row">
-    <button type="button" id="toolAccessButton" class="tool-access-button" aria-label="Open tool permissions" title="Tool permissions">
-      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 7V5a3 3 0 1 1 6 0v2h1a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h1zm1.5 0h3V5a1.5 1.5 0 0 0-3 0v2zM8 9.5a1 1 0 0 0-.5 1.866V13h1v-1.634A1 1 0 0 0 8 9.5z"/></svg>
+    <button type="button" id="toolAccessButton" class="tool-access-button" aria-label="Open chat settings" title="Chat settings">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.7 1h2.6l.3 1.6c.4.1.8.3 1.2.5l1.4-.8 1.8 1.8-.8 1.4c.2.4.4.8.5 1.2l1.6.3v2.6l-1.6.3c-.1.4-.3.8-.5 1.2l.8 1.4-1.8 1.8-1.4-.8c-.4.2-.8.4-1.2.5L9.3 15H6.7l-.3-1.6c-.4-.1-.8-.3-1.2-.5l-1.4.8L2 11.9l.8-1.4c-.2-.4-.4-.8-.5-1.2L.7 9V6.4l1.6-.3c.1-.4.3-.8.5-1.2L2 3.5l1.8-1.8 1.4.8c.4.2.8.4 1.2.5L6.7 1zM8 5.2A2.5 2.5 0 1 0 8 10.2 2.5 2.5 0 0 0 8 5.2z"/></svg>
     </button>
     <div id="context" class="context" hidden></div>
   </div>

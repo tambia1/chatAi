@@ -6,6 +6,7 @@
   const sendButton = document.getElementById('send');
   const cancelButton = document.getElementById('cancel');
   const modelSelectElement = document.getElementById('model');
+  const contextSelectElement = document.getElementById('contextSizeSelect');
   const contextElement = document.getElementById('context');
   const contextSizeElement = document.getElementById('contextSize');
   const approvalElement = document.getElementById('approval');
@@ -15,9 +16,17 @@
   const allowSessionToolButton = document.getElementById('allowSessionTool');
   const denyToolButton = document.getElementById('denyTool');
   const toolAccessButton = document.getElementById('toolAccessButton');
+  const includeActiveFileElement = document.getElementById('includeActiveFile');
+  const includeTreeElement = document.getElementById('includeTree');
+  const includeOpenTabsElement = document.getElementById('includeOpenTabs');
+  const includeToolsElement = document.getElementById('includeTools');
+  const thinkElement = document.getElementById('think');
+  const computeModeElement = document.getElementById('computeMode');
+  const gpuLayersElement = document.getElementById('gpuLayers');
 
   let currentAssistant = null;
   let approvalMode = null;
+  const CONTEXT_SIZES = [2048, 4096, 8192, 16384];
 
   const FILE_ICON_SVG =
     '<svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" aria-hidden="true">' +
@@ -116,6 +125,27 @@
     vscode.setState(state);
   });
 
+  function populateContextSizes(selected, useSaved = true) {
+    contextSelectElement.innerHTML = '';
+    const saved = (vscode.getState() || {}).numCtx;
+    const preferred = useSaved && CONTEXT_SIZES.includes(saved)
+      ? saved
+      : (CONTEXT_SIZES.includes(selected) ? selected : 2048);
+    for (const size of CONTEXT_SIZES) {
+      const option = document.createElement('option');
+      option.value = String(size);
+      option.textContent = (size / 1024) + 'k';
+      option.selected = size === preferred;
+      contextSelectElement.appendChild(option);
+    }
+  }
+
+  contextSelectElement.addEventListener('change', () => {
+    const state = vscode.getState() || {};
+    state.numCtx = Number(contextSelectElement.value);
+    vscode.setState(state);
+  });
+
   function addMessage(role, text) {
     const element = document.createElement('div');
     element.className = 'message ' + role;
@@ -125,9 +155,52 @@
     return element;
   }
 
+  function formatTimer(ms) {
+    const totalMs = Math.max(0, ms);
+    const hours = Math.floor(totalMs / 3600000);
+    const minutes = Math.floor((totalMs % 3600000) / 60000);
+    const seconds = Math.floor((totalMs % 60000) / 1000);
+    const millis = Math.floor(totalMs % 1000);
+    const hh = String(hours).padStart(2, '0');
+    const mm = String(minutes).padStart(2, '0');
+    const ss = String(seconds).padStart(2, '0');
+    const msText = String(millis).padStart(3, '0');
+    return hh + ':' + mm + ':' + ss + '.' + msText;
+  }
+
+  function formatDuration(ms) {
+    if (ms < 1000) return ms + ' ms';
+    if (ms < 60000) return (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + ' s';
+    return (ms / 60000).toFixed(1) + ' min';
+  }
+
+  function startAssistantTimer(assistant) {
+    if (!assistant) return;
+    assistant.timerStartedAt = performance.now();
+    assistant.timerInterval = window.setInterval(() => {
+      const elapsed = performance.now() - assistant.timerStartedAt;
+      assistant.responseMeta.hidden = false;
+      assistant.responseMeta.textContent = formatTimer(elapsed);
+    }, 16);
+  }
+
+  function stopAssistantTimer(assistant) {
+    if (!assistant) return;
+    if (assistant.timerInterval) {
+      window.clearInterval(assistant.timerInterval);
+      assistant.timerInterval = null;
+    }
+  }
+
   function addAssistantMessage() {
     const wrapper = document.createElement('div');
     wrapper.className = 'message assistant';
+
+    const responseMeta = document.createElement('div');
+    responseMeta.className = 'response-meta';
+    responseMeta.hidden = true;
+
+    wrapper.appendChild(responseMeta);
 
     const loader = document.createElement('div');
     loader.className = 'loader';
@@ -157,7 +230,7 @@
     wrapper.appendChild(response);
     messagesElement.appendChild(wrapper);
     messagesElement.scrollTop = messagesElement.scrollHeight;
-    return { loader, thinking, thinkingContent, thinkingFooter, response };
+    return { loader, thinking, thinkingContent, thinkingFooter, response, responseMeta };
   }
 
   function hideLoader(assistant) {
@@ -173,13 +246,13 @@
     input.disabled = streaming;
   }
 
-  function showToolPermissions(tools, selectedNames) {
+  function showSettings(tools, settings) {
     approvalMode = 'config';
-    approvalSummaryElement.textContent = 'Choose which tools are allowed for this session';
+    approvalSummaryElement.textContent = 'Choose what chatAi can access and include in requests';
     approvalListElement.hidden = false;
     approvalListElement.innerHTML = '';
 
-    const selected = new Set(selectedNames || []);
+    const selected = new Set((tools || []).filter((tool) => tool.selected).map((tool) => tool.name));
     const groups = new Map();
     for (const tool of tools) {
       const groupName = tool.group || 'Other';
@@ -215,7 +288,16 @@
       approvalListElement.appendChild(group);
     }
 
-    approveToolButton.textContent = 'Save approvals';
+    includeActiveFileElement.checked = settings?.includeActiveFile !== false;
+    includeTreeElement.checked = settings?.includeTree !== false;
+    includeOpenTabsElement.checked = settings?.includeOpenTabs !== false;
+    includeToolsElement.checked = settings?.includeTools === true;
+    thinkElement.checked = settings?.think === true;
+    computeModeElement.value = settings?.computeMode || 'cpu';
+    gpuLayersElement.value = String(settings?.gpuLayers || 1);
+    gpuLayersElement.disabled = computeModeElement.value !== 'layers';
+    populateContextSizes(settings?.numCtx, false);
+    approveToolButton.textContent = 'Save settings';
     allowSessionToolButton.hidden = true;
     denyToolButton.textContent = 'Close';
     approvalElement.hidden = false;
@@ -231,7 +313,11 @@
   approveToolButton.addEventListener('click', () => {
     if (approvalMode === 'config') {
       const selected = Array.from(approvalListElement.querySelectorAll('input:checked')).map((input) => input.value);
-      vscode.postMessage({ type: 'saveToolApprovals', tools: selected });
+      vscode.postMessage({
+        type: 'saveSettings',
+        tools: selected,
+        settings: getRequestSettings(),
+      });
       hideApproval();
       return;
     }
@@ -255,15 +341,32 @@
       hideApproval();
       return;
     }
-    vscode.postMessage({ type: 'requestToolPermissionState' });
+    vscode.postMessage({ type: 'requestSettingsState' });
   });
+
+  computeModeElement.addEventListener('change', () => {
+    gpuLayersElement.disabled = computeModeElement.value !== 'layers';
+  });
+
+  function getRequestSettings() {
+    return {
+      includeActiveFile: includeActiveFileElement.checked,
+      includeTree: includeTreeElement.checked,
+      includeOpenTabs: includeOpenTabsElement.checked,
+      includeTools: includeToolsElement.checked,
+      think: thinkElement.checked,
+      numCtx: Number(contextSelectElement.value),
+      computeMode: computeModeElement.value,
+      gpuLayers: Number(gpuLayersElement.value),
+    };
+  }
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     const text = input.value.trim();
     if (!text) return;
     input.value = '';
-    vscode.postMessage({ type: 'send', text, model: modelSelectElement.value });
+    vscode.postMessage({ type: 'send', text, model: modelSelectElement.value, settings: getRequestSettings() });
   });
 
   cancelButton.addEventListener('click', () => {
@@ -282,6 +385,7 @@
     switch (message.type) {
       case 'init':
         populateModels(message.models || [], message.selected);
+        populateContextSizes(message.numCtx);
         break;
       case 'context':
         renderContext(message.file, message.selection);
@@ -294,6 +398,9 @@
         break;
       case 'assistantStart':
         currentAssistant = addAssistantMessage();
+        currentAssistant.responseMeta.hidden = false;
+        currentAssistant.responseMeta.textContent = '00:00:00.000';
+        startAssistantTimer(currentAssistant);
         setStreaming(true);
         break;
       case 'thinkingChunk':
@@ -314,21 +421,29 @@
           messagesElement.scrollTop = messagesElement.scrollHeight;
         }
         break;
-      case 'assistantEnd':
-        hideLoader(currentAssistant);
+      case 'assistantEnd': {
+        const assistant = currentAssistant;
+        hideLoader(assistant);
+        stopAssistantTimer(assistant);
+        if (assistant && assistant.responseMeta) {
+          const duration = typeof message.durationMs === 'number' ? message.durationMs : 0;
+          assistant.responseMeta.hidden = false;
+          assistant.responseMeta.textContent = formatTimer(duration);
+        }
         currentAssistant = null;
         setStreaming(false);
         input.focus();
         break;
+      }
       case 'error':
         hideLoader(currentAssistant);
+        stopAssistantTimer(currentAssistant);
         addMessage('error', message.text);
         currentAssistant = null;
         setStreaming(false);
         break;
-      case 'toolPermissionState': {
-        const selected = (message.tools || []).filter((tool) => tool.selected).map((tool) => tool.name);
-        showToolPermissions(message.tools || [], selected);
+      case 'settingsState': {
+        showSettings(message.tools || [], message.settings);
         break;
       }
       case 'clear':

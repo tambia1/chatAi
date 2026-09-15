@@ -84,6 +84,15 @@ body {
   color: #DEE4ED;
 }
 
+.message.assistant .response-meta {
+  margin-bottom: 6px;
+  font-size: 0.75em;
+  font-family: var(--vscode-editor-font-family, monospace);
+  color: var(--vscode-foreground, #DEE4ED);
+  opacity: 0.9;
+  text-align: left;
+}
+
 .message.assistant .response:empty {
   display: none;
 }
@@ -158,6 +167,30 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-section-title {
+  margin: 2px -4px 4px;
+  padding: 5px 8px;
+  background: var(--vscode-button-background, var(--vscode-focusBorder));
+  color: var(--vscode-button-foreground, var(--vscode-editor-background));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border-radius: 3px;
+}
+
+.settings-select-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 4px;
 }
 
 .approval-list {
@@ -345,6 +378,44 @@ body {
 }
 
 #model:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+#contextSizeSelect {
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+  background: var(--vscode-dropdown-background, var(--vscode-input-background));
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, transparent));
+  padding: 2px 6px;
+  border-radius: 2px;
+  font-family: inherit;
+  font-size: inherit;
+  max-width: 25%;
+}
+
+#computeMode,
+#gpuLayers {
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+  background: var(--vscode-dropdown-background, var(--vscode-input-background));
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, transparent));
+  padding: 2px 6px;
+  border-radius: 2px;
+  font-family: inherit;
+  font-size: inherit;
+  max-width: 45%;
+}
+
+#gpuLayers {
+  width: 5em;
+}
+
+#computeMode:focus,
+#gpuLayers:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+#contextSizeSelect:focus {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
 }
