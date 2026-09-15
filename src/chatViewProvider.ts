@@ -534,7 +534,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           tools: WORKSPACE_TOOLS,
           stream: true,
           think: true,
-          options: { num_ctx: numCtx },
+          options: { num_ctx: numCtx, num_gpu: 0 },
         }),
         signal: controller.signal,
       });
@@ -810,7 +810,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const response = await fetch(`${endpoint.replace(/\/$/, '')}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages, tools: WORKSPACE_TOOLS, stream: false, think: true, options: { num_ctx: numCtx } }),
+        body: JSON.stringify({ model, messages, tools: WORKSPACE_TOOLS, stream: false, think: true, options: { num_ctx: numCtx, num_gpu: 0 } }),
         signal,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
