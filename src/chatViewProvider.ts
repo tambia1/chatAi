@@ -580,7 +580,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       settings.includeTree,
       settings.includeOpenTabs,
     );
-    const messages = this.buildMessages(editorContext.text);
+    const messages = this.buildChatMessages(editorContext.text);
     const conversation = this.history.reduce((sum, turn) => sum + turn.content.length, 0);
     this.postContextSize(messages, numCtx, { ...editorContext.parts, conversation });
 
@@ -686,7 +686,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private buildMessages(liveContext: string): OllamaMessage[] {
+  private buildChatMessages(liveContext: string): OllamaMessage[] {
     const messages: OllamaMessage[] = [];
     messages.push({
       role: 'system',
@@ -916,6 +916,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const sections: string[] = [];
     const parts = { activeFile: 0, tree: 0, openTabs: 0 };
 
+    // Always describe what the user sees in the editor (path, selection, open tab names),
+    // so prompts like "this function" work even when full-file context is disabled.
+    const editorState = this.getEditorStateContext();
+    if (editorState) {
+      sections.push(editorState);
+      parts.activeFile += editorState.length;
+    }
+
     const appendSection = (section: string, part: keyof typeof parts): void => {
       if (!section || maxBytes <= 0) return;
       const separatorBytes = sections.length ? 2 : 0;
@@ -956,13 +964,50 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const language = document.languageId;
     const path = vscode.workspace.asRelativePath(document.uri);
     const fullText = document.getText();
-    let output = `[Open file: ${path}]\n\`\`\`${language}\n${fullText}\n\`\`\``;
-    const selection = editor.selection;
-    if (!selection.isEmpty) {
-      const selectedText = document.getText(selection);
-      output += `\n\n[Selection from ${path} (lines ${selection.start.line + 1}-${selection.end.line + 1})]\n\`\`\`${language}\n${selectedText}\n\`\`\``;
+    return `[Full contents of active file: ${path}]\n\`\`\`${language}\n${fullText}\n\`\`\``;
+  }
+
+  private getEditorStateContext(): string {
+    const lines: string[] = [];
+    const editor = vscode.window.activeTextEditor ?? this.lastEditor;
+    const document = editor?.document;
+    if (editor && document && (document.uri.scheme === 'file' || document.uri.scheme === 'untitled')) {
+      const path = vscode.workspace.asRelativePath(document.uri);
+      const language = document.languageId;
+      const selection = editor.selection;
+      const startLine = selection.start.line;
+      const endLine = selection.end.line;
+      lines.push(`[Active file: ${path} (${language}, ${document.lineCount} lines)]`);
+      lines.push(selection.isEmpty
+        ? `Cursor is on line ${startLine + 1}.`
+        : `The user has selected lines ${startLine + 1}-${endLine + 1}.`);
+      if (!selection.isEmpty) {
+        const selectedText = document.getText(selection).slice(0, 4000);
+        lines.push(`[Selected text]\n\`\`\`${language}\n${selectedText}\n\`\`\``);
+      }
+      // Surrounding code with line numbers, so "this function" / "this line" can be resolved.
+      const from = Math.max(0, startLine - 40);
+      const to = Math.min(document.lineCount - 1, endLine + 40);
+      const numbered: string[] = [];
+      for (let line = from; line <= to; line++) {
+        const marker = line >= startLine && line <= endLine ? '>' : ' ';
+        numbered.push(`${marker}${String(line + 1).padStart(5)}| ${document.lineAt(line).text}`);
+      }
+      lines.push(`[Code around the ${selection.isEmpty ? 'cursor' : 'selection'} in ${path}, lines ${from + 1}-${to + 1}; '>' marks the selected/cursor lines]\n\`\`\`${language}\n${numbered.join('\n').slice(0, 8000)}\n\`\`\``);
+      lines.push('When the user says "this", "this function", "this line" or "here", they mean the code at the selection/cursor above in this file.');
     }
-    return output;
+
+    const tabPaths: string[] = [];
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        if (tab.input instanceof vscode.TabInputText) {
+          const path = vscode.workspace.asRelativePath(tab.input.uri);
+          if (!tabPaths.includes(path)) tabPaths.push(path);
+        }
+      }
+    }
+    if (tabPaths.length) lines.push(`[Open tabs]\n${tabPaths.join('\n')}`);
+    return lines.join('\n');
   }
 
   private async getWorkspaceTree(): Promise<string> {
